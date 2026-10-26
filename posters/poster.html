@@ -1,0 +1,110 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>ClefTune Poster</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --accent: #f58247;
+    --bg: #0e0e12;
+    --bg-3: #1d1d25;
+    --line: #2a2a35;
+    --text: #ececf1;
+    --text-2: #a4a4b3;
+    --text-3: #6f6f80;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1200px; height: 1800px; background: var(--bg); overflow: hidden; }
+  body {
+    font-family: "Inter", "Noto Sans", "Cantarell", system-ui, sans-serif;
+    color: var(--text);
+    position: relative;
+  }
+  .glow {
+    position: absolute; left: 50%; top: 520px; width: 1100px; height: 1100px;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(circle, rgba(245,130,71,.38) 0%, rgba(245,130,71,.12) 28%, transparent 62%);
+  }
+  .staff { position: absolute; left: 0; right: 0; top: 380px; height: 260px; }
+  .staff span {
+    position: absolute; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, transparent, rgba(236,236,241,.07) 15%, rgba(236,236,241,.07) 85%, transparent);
+  }
+  .flare {
+    position: absolute; left: 0; right: 0; top: 498px; height: 3px;
+    background: linear-gradient(90deg, transparent 4%, rgba(245,130,71,.9) 50%, transparent 96%);
+    box-shadow: 0 0 24px rgba(245,130,71,.8);
+  }
+  .logo {
+    position: absolute; left: 50%; top: 150px; width: 440px; height: 440px;
+    transform: translateX(-50%);
+    border-radius: 96px;
+    box-shadow: 0 40px 120px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.06);
+  }
+  .content { position: absolute; left: 0; right: 0; top: 680px; text-align: center; padding: 0 90px; }
+  .eyebrow {
+    display: inline-block; font-size: 22px; font-weight: 600; letter-spacing: .28em; text-transform: uppercase;
+    color: var(--accent); padding: 10px 22px; border: 1px solid rgba(245,130,71,.4); border-radius: 999px;
+  }
+  h1 { font-size: 168px; font-weight: 900; letter-spacing: -.045em; line-height: 1; margin-top: 34px; }
+  h1 em { font-style: normal; color: var(--accent); }
+  .tag { font-size: 44px; font-weight: 600; letter-spacing: -.02em; margin-top: 26px; color: var(--text); }
+  .sub { font-size: 28px; line-height: 1.45; color: var(--text-2); margin: 22px auto 0; max-width: 880px; }
+  .grid {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 22px; margin-top: 64px; text-align: left;
+  }
+  .card {
+    background: linear-gradient(180deg, #17171e, #121218);
+    border: 1px solid var(--line); border-radius: 22px; padding: 28px 26px;
+  }
+  .card .n { font-size: 18px; font-weight: 800; color: var(--accent); letter-spacing: .14em; }
+  .card h3 { font-size: 30px; font-weight: 800; letter-spacing: -.02em; margin-top: 12px; }
+  .card p { font-size: 21px; line-height: 1.45; color: var(--text-2); margin-top: 10px; }
+  .grid.mini { margin-top: 22px; }
+  .mini .card { padding: 22px 26px; }
+  .mini .card h3 { margin-top: 0; font-size: 25px; }
+  .mini .card p { font-size: 19px; margin-top: 6px; }
+  .foot { position: absolute; left: 90px; right: 90px; bottom: 74px; display: flex; align-items: center; justify-content: space-between; }
+  .os { display: flex; gap: 14px; }
+  .os span {
+    font-size: 22px; font-weight: 600; padding: 12px 22px; border-radius: 12px;
+    background: var(--bg-3); border: 1px solid var(--line); color: var(--text);
+  }
+  .meta { text-align: right; font-size: 20px; color: var(--text-3); line-height: 1.5; }
+  .meta b { color: var(--accent); font-weight: 600; }
+</style>
+</head>
+<body>
+  <div class="glow"></div>
+  <div class="staff">
+    <span style="top:0"></span><span style="top:65px"></span><span style="top:130px"></span><span style="top:195px"></span><span style="top:260px"></span>
+  </div>
+  <div class="flare"></div>
+  <img class="logo" src="../assets/clef.png" alt="ClefTune">
+
+  <div class="content">
+    <div class="eyebrow">Free &middot; Open-source &middot; GPL-3.0</div>
+    <h1>Clef<em>Tune</em></h1>
+    <div class="tag">Enjoy your Open-source Premiumness.</div>
+    <p class="sub">A desktop music client that's ad-free, gapless and synced to your lyrics, and keeps playing when you close the window.</p>
+
+    <div class="grid">
+      <div class="card"><div class="n">01</div><h3>Never stops</h3><p>Audio lives in the app, not a tab. Close the window, the music plays on.</p></div>
+      <div class="card"><div class="n">02</div><h3>Instant starts</h3><p>Songs resolve in ~0.5s, and the next ones are ready before you ask.</p></div>
+      <div class="card"><div class="n">03</div><h3>Real lyrics</h3><p>Time-synced, word-by-word highlighting with click-to-seek.</p></div>
+    </div>
+    <div class="grid mini">
+      <div class="card"><h3>Popular first</h3><p>Search ranks what people actually play.</p></div>
+      <div class="card"><h3>Safe sign-in</h3><p>Log in through your own browser.</p></div>
+      <div class="card"><h3>Zero setup</h3><p>Everything bundled. Just install.</p></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <div class="os"><span>Windows</span><span>macOS</span><span>Linux</span></div>
+    <div class="meta"><b>github.com/ettisafxrup/ClefTune</b><br>Free forever &middot; No admin rights</div>
+  </div>
+</body>
+</html>

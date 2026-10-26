@@ -15,7 +15,7 @@
   <br>
   <img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-f58247?style=flat-square">
   <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-f58247?style=flat-square&logo=python&logoColor=white">
-  <img alt="No framework" src="https://img.shields.io/badge/UI-plain%20HTML%20%2F%20CSS%20%2F%20JS-f58247?style=flat-square">
+  <img alt="No framework" src="https://img.shields.io/badge/UI-Web%20&%20Native-f58247?style=flat-square">
 </p>
 
 [**Install**](#-install) · [**Features**](#-features) · [**Sign in**](#-signing-in-optional) · [**How it works**](#-how-it-works) · [**Build**](#-building-the-installers) · [**Develop**](#-run-from-source)
