@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cleftune"
+version = "1.0.0"
+description = "Unofficial YouTube Music client for Windows, macOS and Linux, inspired by Metrolist for Android"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-or-later" }
+dependencies = [
+    "ytmusicapi>=1.10",
+    "yt-dlp[default]>=2025.11.12",
+    "pywebview>=5.3",
+    "av>=14",                 # native audio engine: FFmpeg decoder
+    "miniaudio>=1.61",        # native audio engine: sound output
+    "python-mpv>=1.0.7",
+    "dbus-next>=0.2.3; sys_platform == 'linux'",
+]
+
+[project.optional-dependencies]
+# Bundled JavaScript runtime for yt-dlp (~90 MB). Only needed when Deno, Node or Bun isn't installed.
+deno = ["deno>=2.5"]
+# Self-contained window for Linux (Qt WebEngine); used by the Linux installer's window add-on.
+window-qt = ["PySide6-WebEngine>=6.12"]
+# Tray icon for the Windows window add-on.
+tray = ["pystray>=0.19", "pillow>=10"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+cleftune = "cleftune.launch:main"
+
+[project.gui-scripts]
+cleftune-gui = "cleftune.launch:main"
+
+[tool.setuptools]
+packages = ["cleftune", "cleftune.engines"]
+
+[tool.setuptools.package-data]
+cleftune = ["web/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

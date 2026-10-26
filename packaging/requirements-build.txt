@@ -1,0 +1,9 @@
+# Everything needed to build the installers: python -m pip install -r packaging/requirements-build.txt
+.
+pyinstaller>=6.10
+deno>=2.5
+pillow>=10
+# tray icon for the Windows window add-on
+pystray>=0.19; sys_platform == "win32"
+# Qt WebEngine for the Linux window add-on (split into its own wheel since PySide6 6.12)
+PySide6-WebEngine>=6.11.2; sys_platform == "linux"

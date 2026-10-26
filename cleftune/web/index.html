@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="token" content="__TOKEN__">
+  <title>ClefTune</title>
+  <link rel="icon" href="/static/icon.png" type="image/png">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="brand"><img src="/static/icon.png" alt=""><span>ClefTune</span></div>
+      <nav id="nav"></nav>
+      <div id="sidebar-playlists"></div>
+      <div class="sidebar-foot" id="sidebar-foot"></div>
+    </aside>
+
+    <main id="main">
+      <header id="topbar">
+        <button class="icon-btn" id="nav-back" title="Back"></button>
+        <button class="icon-btn" id="nav-forward" title="Forward"></button>
+        <div class="search-wrap">
+          <span class="search-icon" id="search-icon"></span>
+          <input id="search" type="search" placeholder="Search songs, albums, artists, playlists" autocomplete="off" spellcheck="false">
+          <ul id="suggestions" hidden></ul>
+        </div>
+        <div id="account-chip"></div>
+      </header>
+      <div id="view" tabindex="-1"></div>
+    </main>
+
+    <aside id="panel" hidden>
+      <div class="panel-tabs">
+        <button data-tab="queue" class="tab">Up next</button>
+        <button data-tab="lyrics" class="tab">Lyrics</button>
+        <button class="icon-btn" id="panel-close" title="Close"></button>
+      </div>
+      <div id="panel-body"></div>
+    </aside>
+
+    <footer id="playerbar">
+      <div class="pb-left">
+        <button id="pb-art" class="pb-art" title="Now playing"></button>
+        <div class="pb-meta">
+          <div id="pb-title" class="pb-title">Nothing playing</div>
+          <div id="pb-artist" class="pb-artist"></div>
+        </div>
+        <button class="icon-btn" id="pb-like" title="Like (L)"></button>
+      </div>
+      <div class="pb-center">
+        <div class="pb-controls">
+          <button class="icon-btn" id="pb-shuffle" title="Shuffle (S)"></button>
+          <button class="icon-btn" id="pb-prev" title="Previous (Shift+←)"></button>
+          <button class="play-btn" id="pb-play" title="Play/Pause (Space)"></button>
+          <button class="icon-btn" id="pb-next" title="Next (Shift+→)"></button>
+          <button class="icon-btn" id="pb-repeat" title="Repeat (R)"></button>
+        </div>
+        <div class="pb-seek">
+          <span id="pb-time" class="time">0:00</span>
+          <input id="pb-seekbar" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek">
+          <span id="pb-dur" class="time">0:00</span>
+        </div>
+      </div>
+      <div class="pb-right">
+        <span id="pb-stream" class="pb-stream"></span>
+        <button class="icon-btn" id="pb-sleep" title="Sleep timer"></button>
+        <button class="icon-btn" id="pb-lyrics" title="Lyrics"></button>
+        <button class="icon-btn" id="pb-queue" title="Up next (Q)"></button>
+        <button class="icon-btn" id="pb-mute" title="Mute (M)"></button>
+        <input id="pb-volume" type="range" min="0" max="100" value="80" aria-label="Volume">
+      </div>
+    </footer>
+  </div>
+
+  <div id="menu" class="menu" hidden></div>
+  <div id="modal-backdrop" hidden><div id="modal" role="dialog"></div></div>
+  <div id="toasts"></div>
+  <audio id="audio" preload="auto"></audio>
+  <script src="/static/app.js"></script>
+</body>
+</html>
