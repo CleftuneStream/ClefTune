@@ -9,8 +9,16 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 # Separate archives so a browser-only install never unpacks the (large) window add-on.
-XZ_OPT="-9 -T0" tar -C "$(dirname "$CORE")" -cJf "$work/core.tar.xz" "$(basename "$CORE")"
-XZ_OPT="-9 -T0" tar -C "$(dirname "$WINDOW")" -cJf "$work/window.tar.xz" "$(basename "$WINDOW")"
+# The BCJ filter makes machine code compress better and the big dictionary finds repeats across
+# libraries: ~10% smaller than plain -9 (decompressing needs ~200 MB of RAM).
+case "$(uname -m)" in
+  x86_64|amd64) bcj="--x86" ;;
+  aarch64|arm64) xz --help 2>/dev/null | grep -q -- "--arm64" && bcj="--arm64" || bcj="" ;;
+  *) bcj="" ;;
+esac
+export XZ_OPT="-T0 $bcj --lzma2=preset=9e,dict=192MiB"
+tar -C "$(dirname "$CORE")" -cJf "$work/core.tar.xz" "$(basename "$CORE")"
+tar -C "$(dirname "$WINDOW")" -cJf "$work/window.tar.xz" "$(basename "$WINDOW")"
 cp "$WEB/icon.png" "$work/"
 
 sed "s/@VERSION@/$VERSION/g" "$HERE/installer.sh" > "$OUT"

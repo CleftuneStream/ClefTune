@@ -106,12 +106,45 @@ def card(kind: str, item_id: str, title: str, subtitle: str = "", thumbnail=None
             "thumbnail": best_thumbnail(thumbnail) if not isinstance(thumbnail, str) else thumbnail}
 
 
+def parse_count(value) -> int | None:
+    """"7B", "1.2M", "155K", "1,234" (plays/views as YouTube Music shows them) -> a number."""
+    if isinstance(value, (int, float)):
+        return int(value)
+    m = re.match(r"\s*([\d.,]+)\s*([KMB]?)", str(value or ""), re.I)
+    if not m:
+        return None
+    digits, unit = m.group(1), m.group(2).upper()
+    try:
+        number = float(digits.replace(",", "")) if unit else float(digits.replace(",", "").replace(".", ""))
+    except ValueError:
+        return None
+    return int(number * {"": 1, "K": 1e3, "M": 1e6, "B": 1e9}[unit])
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"\w+", (text or "").casefold())
+
+
+def rank_by_popularity(items: list[dict], query: str) -> list[dict]:
+    """Most played first, but songs that match every word of the query stay ahead of more popular
+    songs that don't (searching "believer" shouldn't put a hit called "Believe" on top)."""
+    wanted = set(_words(query))
+
+    def relevant(t: dict) -> bool:
+        have = set(_words(" ".join([t.get("title") or "", t.get("artist") or "", (t.get("album") or {}).get("name") or ""])))
+        return all(any(h.startswith(w) for h in have) for w in wanted)
+
+    return sorted(items, key=lambda t: (not relevant(t), -(t.get("views") or 0)))
+
+
 def from_search(item: dict) -> dict | None:
     kind = item.get("resultType")
     if kind in ("song", "video", "episode"):
         t = track(item)
         if t and kind == "video":
             t["isVideo"] = True
+        if t and parse_count(item.get("views")) is not None:
+            t["views"] = parse_count(item.get("views"))
         return t
     if kind == "album" and item.get("browseId"):
         artist = ", ".join(a["name"] for a in _artists(item))

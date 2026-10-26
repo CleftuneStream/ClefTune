@@ -1,8 +1,8 @@
 """Turns a videoId into a playable audio source: a downloaded/cached file, or a YouTube stream URL.
 
 Speed matters here (it's most of the time between "click" and "sound"):
-* fast path: one player client, no watch-page download, shared visitor data, falls back to
-  yt-dlp's full default flow when YouTube refuses it;
+* fast path: one player client, no watch-page/initial-data download, shared visitor data (~0.3 s
+  instead of ~2 s), falls back to yt-dlp's full default flow when YouTube refuses it;
 * yt-dlp instances are reused per thread (saves its ~0.5 s start-up);
 * resolved URLs are remembered on disk until they expire, so replays skip the lookup;
 * upcoming songs are resolved ahead of time and their first chunk is pre-downloaded.
@@ -38,7 +38,9 @@ QUALITY_FORMATS = {
 EXPIRY_MARGIN = 10 * 60
 HEAD_BYTES = 512 * 1024               # pre-downloaded start of upcoming songs
 HEAD_SLOTS = 6
-FAST_PATH_CLIENT = "tv_samsung"
+# Player clients for the fast path, best first. The first one the installed yt-dlp knows is used:
+# yt-dlp drops clients over time and silently falls back to its slow default flow for unknown ones.
+FAST_PATH_CLIENTS = ("visionos", "android_vr", "tv_simply")
 log = logging.getLogger("cleftune.streams")
 CONTENT_ERRORS = ("unavailable", "private", "removed", "copyright", "not available in your country",
                   "confirm your age", "members-only", "terminated")
@@ -65,6 +67,14 @@ class StreamInfo:
     def describe(self) -> str:
         parts = [self.codec or self.ext, self.bitrate and f"{round(self.bitrate)} kbps", "offline" if self.path else None]
         return " • ".join(p for p in parts if p)
+
+
+def fast_path_client() -> str | None:
+    try:
+        from yt_dlp.extractor.youtube._base import INNERTUBE_CLIENTS
+    except ImportError:
+        return None
+    return next((c for c in FAST_PATH_CLIENTS if c in INNERTUBE_CLIENTS), None)
 
 
 def detect_js_runtimes() -> dict:
@@ -140,6 +150,7 @@ class StreamResolver:
         self.cookie_provider = cookie_provider       # () -> "Cookie" header | None
         self.visitor_provider = visitor_provider     # () -> visitor data | None
         self.js_runtimes = detect_js_runtimes()
+        self.fast_client = fast_path_client()
         self._cache: dict[str, StreamInfo] = {}
         self._pending: dict[str, Future] = {}
         self._heads: collections.OrderedDict[str, Head] = collections.OrderedDict()
@@ -167,6 +178,13 @@ class StreamResolver:
         if self.local_path_lookup(video_id):
             return
         self._future(video_id)      # the first chunk is fetched automatically once resolved
+
+    def warm_up(self) -> None:
+        """Build yt-dlp on the resolver threads now (~0.4 s each), not when the first song is clicked.
+        Never blocks: a song clicked meanwhile just takes the next free thread."""
+        fast = self._fast_allowed()
+        for _ in range(self._pool._max_workers):
+            self._pool.submit(lambda: self._ydl(fast=fast).get_info_extractor("Youtube"))
 
     def get_head(self, video_id: str, wait: float = 0.0) -> Head | None:
         """The pre-downloaded first chunk; optionally wait for a warm-up that's already running."""
@@ -268,7 +286,11 @@ class StreamResolver:
             finally:
                 with self._lock:
                     self._head_jobs.discard(video_id)
-        self._head_pool.submit(job)
+        try:
+            self._head_pool.submit(job)
+        except RuntimeError:           # shutting down
+            with self._lock:
+                self._head_jobs.discard(video_id)
 
     # -- yt-dlp ---------------------------------------------------------------
     def ydl_options(self, fmt: str | None = None, fast: bool = False) -> dict:
@@ -287,7 +309,7 @@ class StreamResolver:
         if cookies:
             opts["cookiefile"] = str(cookies)
         elif fast:
-            youtube_args.update({"player_client": [FAST_PATH_CLIENT], "player_skip": ["webpage", "configs"],
+            youtube_args.update({"player_client": [self.fast_client], "player_skip": ["webpage", "configs", "initial_data"],
                                  "visitor_data": [self._visitor_data()]})
         return opts
 
@@ -298,7 +320,8 @@ class StreamResolver:
             return None
 
     def _fast_allowed(self) -> bool:
-        return (not self._cookie_path() and time.time() >= self._fast_off_until and bool(self._visitor_data()))
+        return (bool(self.fast_client) and not self._cookie_path() and time.time() >= self._fast_off_until
+                and bool(self._visitor_data()))
 
     def _ydl(self, fast: bool) -> yt_dlp.YoutubeDL:
         key = (fast, self._opts_gen)
@@ -331,7 +354,8 @@ class StreamResolver:
         started = time.monotonic()
         if self._fast_allowed():
             try:
-                info = self._ydl(fast=True).extract_info(url, download=False)
+                # a www URL: music.youtube.com URLs make yt-dlp fetch the music client's extra data first
+                info = self._ydl(fast=True).extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
                 self._fast_failures = 0
                 log.info("resolved %s via fast path in %.2fs", video_id, time.monotonic() - started)
                 return self._to_stream(video_id, info)

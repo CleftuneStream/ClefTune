@@ -223,15 +223,6 @@ class App:
         else:
             self.open_browser()
 
-    def start_login_window(self) -> None:
-        """Open a Google sign-in window; it reports the YouTube cookies back via login_cookies."""
-        cmd = find_viewer()
-        if not cmd:
-            raise ValueError("Signing in with Google needs the separate window. " + window_install_hint() +
-                             " Or use your browser's login instead.")
-        subprocess.Popen(cmd + ["--login", "--url", self.ui_url, "--token", self.server.token],
-                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
     def quit(self) -> None:
         self._quit.set()
         threading.Thread(target=self.close_viewer, daemon=True).start()
@@ -245,6 +236,7 @@ class App:
         with self.player._lock:
             upcoming = [t["videoId"] for t in self.player.queue[max(self.player.index, 0):self.player.index + 2]]
         self.player.prefetch(upcoming)
+        self.resolver.warm_up()
 
     def _autosave(self) -> None:
         while not self._quit.wait(30):

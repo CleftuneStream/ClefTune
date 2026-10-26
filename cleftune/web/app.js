@@ -141,7 +141,7 @@ const S = {
   pos: 0, dur: 0, playing: false, posAt: performance.now(),
   liked: new Set(),
   downloaded: new Set(),
-  lyrics: null, lyricsFor: null, lyricIndex: -1,
+  lyrics: null, lyricsFor: null, lyricIndex: -1, lyricsFollowAt: 0,
   panel: null,
   settings: {},
   about: {},
@@ -257,6 +257,7 @@ function connectEvents() {
   });
   on("engine", handleEngine);
   on("toast", t => toast(t.message, t.kind || ""));
+  on("login", ev => loginWatch.onEvent?.(ev));
   on("account", () => { renderAccountChip(); if (/^#\/(settings|library)/.test(location.hash)) route(); });
   on("cache", () => { if (location.hash.startsWith("#/cache")) route(); });
   on("downloads", () => {
@@ -276,6 +277,7 @@ function renderPlayButton() {
   btn.dataset.mode = want;
   btn.replaceChildren(loading ? h("div", { class: "spinner" }) : icon(S.playing ? "pause" : "play", 28));
   document.body.classList.toggle("paused", !S.playing);
+  renderNowPlayingControls();
   updateMediaSession();
 }
 
@@ -303,7 +305,9 @@ function renderPlayerBar() {
   if (document.activeElement !== volEl) { volEl.value = vol; volEl.style.setProperty("--p", vol + "%"); }
   setIcon($("#pb-mute"), vol === 0 ? "mute" : "volume");
   if (st?.error) $("#pb-artist").replaceChildren(h("span", { style: "color:#e5484d" }, st.error));
+  $("#pb-title").title = cur ? (cur.album?.id ? `${cur.title} — open the album` : cur.title) : "";
   renderPlayButton();
+  renderNowPlayingControls();
 }
 
 function currentPos() {
@@ -315,13 +319,18 @@ function currentPos() {
 function tick() {
   const pos = currentPos();
   if (!S.seeking) {
-    const bar = $("#pb-seekbar");
     const pct = S.dur ? (pos / S.dur) * 100 : 0;
-    bar.value = Math.round(pct * 10);
-    bar.style.setProperty("--p", pct + "%");
-    $("#pb-time").textContent = fmt(pos);
+    for (const [barSel, timeSel] of [["#pb-seekbar", "#pb-time"], ["#np-seekbar", "#np-time"]]) {
+      const bar = $(barSel);
+      if (!bar) continue;
+      bar.value = Math.round(pct * 10);
+      bar.style.setProperty("--p", pct + "%");
+      $(timeSel).textContent = fmt(pos);
+    }
   }
   $("#pb-dur").textContent = fmt(S.dur);
+  const npDur = $("#np-dur");
+  if (npDur) npDur.textContent = fmt(S.dur);
   updateLyricHighlight(pos);
   requestAnimationFrame(tick);
 }
@@ -357,9 +366,18 @@ function setupPlayerBar() {
     call("repeat", { mode: order[(order.indexOf(S.state?.repeat || "off") + 1) % 3] });
   };
   $("#pb-like").onclick = () => S.state?.current && toggleLike(S.state.current);
-  $("#pb-art").onclick = () => S.state?.current && go("/nowplaying");
-  $("#pb-title").onclick = () => S.state?.current?.album?.id && go(`/album/${S.state.current.album.id}`);
+  // artwork: full-screen player with lyrics (click again to go back); title: the album; artist: their page
+  const openNowPlaying = () => {
+    if (!S.state?.current) return;
+    if (location.hash.startsWith("#/nowplaying")) history.back(); else go("/nowplaying");
+  };
+  $("#pb-art").onclick = openNowPlaying;
+  $("#pb-title").onclick = () => {
+    const album = S.state?.current?.album;
+    if (album?.id) go(`/album/${album.id}`); else openNowPlaying();   // videos/uploads have no album
+  };
   $("#pb-title").classList.add("link");
+  $("#pb-title").setAttribute("role", "button");
   $("#pb-queue").onclick = () => togglePanel("queue");
   $("#pb-lyrics").onclick = () => togglePanel("lyrics");
   $("#pb-sleep").onclick = e => openMenu(e.currentTarget, [
@@ -369,18 +387,7 @@ function setupPlayerBar() {
     S.state?.sleep != null && { label: "Turn off", icon: "close", run: () => call("sleep", { minutes: 0 }).then(() => toast("Sleep timer off")) },
   ], "up");
 
-  const seek = $("#pb-seekbar");
-  seek.addEventListener("input", () => {
-    S.seeking = true;
-    const pct = seek.value / 10;
-    seek.style.setProperty("--p", pct + "%");
-    $("#pb-time").textContent = fmt((pct / 100) * S.dur);
-  });
-  seek.addEventListener("change", () => {
-    const pos = (seek.value / 1000) * S.dur;
-    S.pos = pos; S.posAt = performance.now(); S.seeking = false;
-    call("seek", { pos });
-  });
+  bindSeekbar($("#pb-seekbar"), "#pb-time");
 
   const vol = $("#pb-volume");
   const sendVol = debounce(v => call("volume", { volume: v }), 60);
@@ -440,6 +447,7 @@ async function toggleLike(track) {
     b.classList.toggle("on", liked); setIcon(b, liked ? "heart" : "heartOutline");
   });
   if (S.state?.current?.videoId === track.videoId) renderPlayerBar();
+  renderNowPlayingControls();
   await act("like", { track: clean(track), liked }, liked ? "Added to Liked songs" : "Removed from Liked songs");
 }
 
@@ -710,6 +718,7 @@ async function route() {
   const [name, arg] = parts;
   document.querySelectorAll(".nav-item").forEach(n => n.classList.toggle("active", n.dataset.route === name));
   if (name !== "search") $("#search").value = "";
+  view.classList.toggle("np-mode", name === "nowplaying");
   view.scrollTop = 0;
   const views = { home: homeView, explore: exploreView, search: searchView, album: albumView, artist: artistView,
     playlist: playlistView, mood: moodView, library: libraryView, downloads: downloadsView, settings: settingsView, cache: cacheView,
@@ -999,6 +1008,8 @@ async function cacheView() {
 }
 
 /* ---------- settings ---------- */
+const loginWatch = { onEvent: null };   // the open Settings page listens for browser sign-in results
+
 function switchInput(checked, onchange) {
   const input = h("input", { type: "checkbox" });
   input.checked = !!checked;
@@ -1040,14 +1051,38 @@ async function settingsView() {
         h("button", { class: "btn", onclick: async () => { await act("logout", {}, "Signed out"); renderAccountChip(); route(); } }, "Sign out"))
     : (() => {
         const ta = h("textarea", { class: "text-input", placeholder: "Paste the request headers here…" });
+        const signedIn = info => { toast(`Signed in as ${info?.name || "you"}`); renderAccountChip(); route(); };
+        const status = h("div", { class: "login-status", hidden: true });
+        const showWaiting = label => {
+          status.hidden = false;
+          status.replaceChildren(h("div", { class: "spinner small" }),
+            h("div", null, h("div", { class: "lbl" }, `Finish signing in in ${label}`),
+              h("div", { class: "hint" }, `Google's sign-in page opened in ${label}. ClefTune signs in by itself as soon as you're done there.`)),
+            h("button", { class: "btn small", onclick: () => { call("login_cancel"); status.hidden = true; } }, "Cancel"));
+        };
+        const start = async (btn, browserId = "") => {
+          btn.disabled = true;
+          try {
+            const res = await call("login_start", { browser: browserId });
+            if (res.status === "signed-in") signedIn(res); else showWaiting(res.browser);
+          } catch (err) { toast(err.message, "error"); }
+          btn.disabled = false;
+        };
+        loginWatch.onEvent = ev => {
+          if (ev.status === "signed-in") signedIn(ev);
+          else { status.hidden = true; if (ev.message) toast(ev.message, "error"); }
+        };
+        const primary = h("button", { class: "btn primary google", onclick: e => start(e.currentTarget) }, icon("person"), "Sign in with Google");
         const browsersRow = h("div", { class: "btn-row" }, h("span", { class: "faint" }, "Looking for browsers…"));
-        call("login_browsers").then(list => browsersRow.replaceChildren(...(list.length
-          ? list.map(b => h("button", { class: "btn", onclick: async e => {
-              const btn = e.currentTarget; btn.disabled = true;
-              try { const info = await call("login_browser", { browser: b.id }); toast(`Signed in as ${info.name || "you"}`); renderAccountChip(); route(); }
-              catch (err) { toast(err.message, "error"); btn.disabled = false; }
-            } }, b.label))
-          : [h("span", { class: "faint" }, "No supported browser found.")]))).catch(() => browsersRow.replaceChildren());
+        call("login_browsers").then(list => {
+          const def = list.find(b => b.default) || list[0];
+          if (def) primary.replaceChildren(icon("person"), "Sign in with Google", h("span", { class: "via" }, `via ${def.label}`));
+          else primary.disabled = true;
+          const others = list.filter(b => b !== def);
+          browsersRow.replaceChildren(...(others.length
+            ? [h("span", { class: "faint" }, "Or use:"), ...others.map(b => h("button", { class: "btn small", onclick: e => start(e.currentTarget, b.id) }, b.label))]
+            : list.length ? [] : [h("span", { class: "faint" }, "No supported browser found. Use the advanced option below.")]));
+        }).catch(() => browsersRow.replaceChildren());
         const advanced = h("details", { class: "advanced" },
           h("summary", null, "Advanced: paste request headers"),
           h("ol", { class: "steps" },
@@ -1065,14 +1100,8 @@ async function settingsView() {
           h("div", null,
             h("div", { class: "lbl" }, "Sign in to YouTube Music (optional)"),
             h("div", { class: "hint" }, "Brings your YouTube Music likes, playlists and history into ClefTune. Your login stays on this computer.")),
-          about.windowAvailable ? h("div", null,
-            h("button", { class: "btn primary", onclick: async () => {
-              try { await call("login_window"); toast("A sign-in window opened. Sign in there; it closes by itself when you're done."); }
-              catch (e) { toast(e.message, "error"); }
-            } }, icon("person"), "Sign in with Google")) : null,
-          h("div", null, h("div", { class: "hint", style: "margin-bottom:8px" },
-            about.windowAvailable ? "Or use the login from a browser where you're already signed in to YouTube:" :
-              "Use the login from a browser where you're already signed in to YouTube:"), browsersRow),
+          h("div", { class: "hint" }, "Signs in through your web browser, so Google sees a normal, trusted sign-in. If you're already signed in to YouTube there, it takes a second."),
+          h("div", { class: "btn-row" }, primary), browsersRow, status,
           advanced);
       })();
 
@@ -1147,18 +1176,81 @@ async function settingsView() {
 }
 
 /* ---------- now playing ---------- */
+const bigArt = src => src?.replace(/=w\d+-h\d+/, "=w1080-h1080");
+
 async function nowPlayingView() {
   const cur = S.state?.current;
-  if (!cur) return h("div", { class: "center-msg" }, "Nothing is playing.");
-  const lyricsBox = h("div", { class: "np-right", id: "np-lyrics" });
+  if (!cur) return h("div", { class: "center-msg" }, icon("note", 44), "Nothing is playing.",
+    h("button", { class: "btn", onclick: () => go("/home") }, "Find something to play"));
+  const lyricsBox = h("div", { class: "np-right", id: "np-lyrics" }, lyricsSkeleton());
+  const btn = (id, ic, title, run) => h("button", { class: "icon-btn", id, title, onclick: run }, icon(ic));
+  const seek = h("input", { id: "np-seekbar", type: "range", min: "0", max: "1000", value: "0", "aria-label": "Seek" });
+  bindSeekbar(seek, "#np-time");
   const out = h("div", { class: "np" },
+    h("div", { class: "np-bg", "aria-hidden": "true" }, cur.thumbnail ? h("img", { src: bigArt(cur.thumbnail), alt: "", referrerpolicy: "no-referrer" }) : null),
     h("div", { class: "np-left" },
-      h("div", { class: "np-art" }, img(cur.thumbnail?.replace(/=w\d+-h\d+/, "=w1080-h1080"))),
-      h("div", { class: "np-title" }, cur.title),
-      h("div", { class: "muted" }, artistLinks(cur), cur.album?.name ? [" • ", cur.album.id ? h("span", { class: "link", onclick: () => go(`/album/${cur.album.id}`) }, cur.album.name) : cur.album.name] : null)),
-    lyricsBox);
-  ensureLyrics().then(() => renderLyricsInto(lyricsBox));
+      h("div", { class: "np-art" + (S.playing ? "" : " paused"), id: "np-art", title: "Back (Esc)", onclick: () => history.back() }, img(bigArt(cur.thumbnail))),
+      h("div", { class: "np-meta" },
+        h("div", { class: "np-title" + (cur.album?.id ? " link" : ""), title: cur.album?.id ? `Open the album “${cur.album.name}”` : cur.title,
+          onclick: () => cur.album?.id && go(`/album/${cur.album.id}`) }, cur.title),
+        h("div", { class: "np-artist" }, artistLinks(cur)),
+        cur.album?.name ? h("div", { class: "np-album faint" }, cur.album.name) : null),
+      h("div", { class: "np-seek" },
+        h("span", { class: "time", id: "np-time" }, fmt(currentPos())), seek, h("span", { class: "time", id: "np-dur" }, fmt(S.dur))),
+      h("div", { class: "np-controls" },
+        btn("np-shuffle", "shuffle", "Shuffle (S)", () => $("#pb-shuffle").click()),
+        btn("np-prev", "prev", "Previous (Shift+←)", () => call("previous")),
+        h("button", { class: "play-btn big", id: "np-play", title: "Play/Pause (Space)", onclick: () => call("toggle") }),
+        btn("np-next", "next", "Next (Shift+→)", () => call("next")),
+        btn("np-repeat", "repeat", "Repeat (R)", () => $("#pb-repeat").click())),
+      h("div", { class: "np-actions" },
+        h("button", { class: "btn small", id: "np-like", onclick: () => toggleLike(cur) }),
+        h("button", { class: "btn small", onclick: e => trackMenu(e.currentTarget, cur) }, icon("more"), "More"),
+        h("button", { class: "btn small", onclick: () => togglePanel("queue") }, icon("queue"), "Up next"))),
+    h("div", { class: "np-lyrics-col" }, h("div", { class: "lyrics-head-slot" }), lyricsBox));
+  ensureLyrics().then(() => { if (S.state?.current?.videoId === cur.videoId) renderLyricsInto(lyricsBox); });
+  queueMicrotask(renderNowPlayingControls);
   return out;
+}
+
+function lyricsSkeleton() {
+  return h("div", { class: "lyrics-skeleton" }, [78, 62, 90, 54, 70, 84, 48].map(w => h("i", { style: `width:${w}%` })));
+}
+
+/* keeps the big player's buttons in step with the player bar */
+function renderNowPlayingControls() {
+  const play = $("#np-play");
+  if (!play) return;
+  const st = S.state, cur = st?.current;
+  const want = st?.loading ? "loading" : S.playing ? "pause" : "play";
+  if (play.dataset.mode !== want) {
+    play.dataset.mode = want;
+    play.replaceChildren(st?.loading ? h("div", { class: "spinner" }) : icon(S.playing ? "pause" : "play", 34));
+  }
+  $("#np-art")?.classList.toggle("paused", !S.playing);
+  $("#np-shuffle")?.classList.toggle("on", !!st?.shuffle);
+  const rep = $("#np-repeat");
+  if (rep) { setIcon(rep, st?.repeat === "one" ? "repeatOne" : "repeat"); rep.classList.toggle("on", !!st && st.repeat !== "off"); }
+  const like = $("#np-like");
+  if (like && cur) {
+    const liked = S.liked.has(cur.videoId);
+    like.classList.toggle("on", liked);
+    like.replaceChildren(icon(liked ? "heart" : "heartOutline"), liked ? "Liked" : "Like");
+  }
+}
+
+function bindSeekbar(bar, timeSel) {
+  bar.addEventListener("input", () => {
+    S.seeking = true;
+    const pct = bar.value / 10;
+    bar.style.setProperty("--p", pct + "%");
+    $(timeSel).textContent = fmt((pct / 100) * S.dur);
+  });
+  bar.addEventListener("change", () => {
+    const pos = (bar.value / 1000) * S.dur;
+    S.pos = pos; S.posAt = performance.now(); S.seeking = false;
+    call("seek", { pos });
+  });
 }
 
 /* ============================================================
@@ -1179,7 +1271,7 @@ function renderPanel() {
   if (!S.panel) return;
   const body = $("#panel-body");
   if (S.panel === "queue") renderQueue(body);
-  else { body.replaceChildren(h("div", { class: "center-msg" }, h("div", { class: "spinner" }))); ensureLyrics().then(() => S.panel === "lyrics" && renderLyricsInto(body)); }
+  else { body.replaceChildren(lyricsSkeleton()); ensureLyrics().then(() => S.panel === "lyrics" && renderLyricsInto(body)); }
 }
 
 let dragFrom = null;
@@ -1258,7 +1350,20 @@ function renderLyricsInto(container) {
       offsetLabel,
       h("button", { class: "btn small", title: "Lyrics are late: show them sooner", onclick: () => nudge(0.25) }, "+0.25s"),
       L.offset ? h("button", { class: "btn small", onclick: () => nudge(0) }, "Reset") : null) : null);
-  container.replaceChildren(head, box);
+  const resync = h("button", { class: "btn small lyrics-resync", hidden: true,
+    onclick: () => { S.lyricsFollowAt = 0; resync.hidden = true; updateLyricHighlight(currentPos(), true); } }, icon("down"), "Back to current line");
+  // the big player keeps the header outside its faded scroll area
+  const slot = container.previousElementSibling?.classList.contains("lyrics-head-slot") ? container.previousElementSibling : null;
+  if (slot) slot.replaceChildren(head);
+  container.replaceChildren(...[slot ? null : head, box, L.synced ? resync : null].filter(Boolean));
+  // scrolling the lyrics yourself pauses auto-scroll for a few seconds
+  if (L.synced && !container.dataset.follow) {
+    container.dataset.follow = "1";
+    const pause = () => { S.lyricsFollowAt = performance.now() + 5000; const r = container.querySelector(".lyrics-resync"); if (r) r.hidden = false; };
+    container.addEventListener("wheel", pause, { passive: true });
+    container.addEventListener("touchmove", pause, { passive: true });
+  }
+  S.lyricsFollowAt = 0;
   updateLyricHighlight(currentPos(), true);
 }
 
@@ -1283,7 +1388,9 @@ function updateLyricHighlight(pos, force = false) {
     if (active && lineChanged) {
       // centre the active line inside its own scroller (never scrolls the whole page)
       const scroller = box.closest("#panel-body, .np-right");
-      if (scroller) {
+      const following = force || !S.lyricsFollowAt || performance.now() > S.lyricsFollowAt;
+      if (following) scroller?.querySelector(".lyrics-resync")?.setAttribute("hidden", "");
+      if (scroller && following) {
         const target = active.offsetTop - scroller.clientHeight / 2 + active.clientHeight / 2;
         scroller.scrollTo({ top: target, behavior: force ? "auto" : "smooth" });
       }
@@ -1398,6 +1505,7 @@ function setupShortcuts() {
     else if (k === "r") $("#pb-repeat").click();
     else if (k === "q") togglePanel("queue");
     else if (k === "y") togglePanel("lyrics");
+    else if (k === "Escape" && location.hash.startsWith("#/nowplaying")) history.back();
     else return;
   });
 }

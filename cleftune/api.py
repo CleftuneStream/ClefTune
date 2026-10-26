@@ -8,6 +8,8 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
+import webbrowser
 
 import yt_dlp
 import ytmusicapi
@@ -22,6 +24,43 @@ def _track(t: dict) -> dict:
     return t
 
 
+# commands that open a URL in one particular browser, when it isn't the default
+_BROWSER_COMMANDS = {
+    "linux": {"firefox": ["firefox"], "chrome": ["google-chrome", "google-chrome-stable"], "edge": ["microsoft-edge"],
+              "brave": ["brave-browser", "brave"], "chromium": ["chromium", "chromium-browser"], "opera": ["opera"],
+              "vivaldi": ["vivaldi", "vivaldi-stable"]},
+    "darwin": {"firefox": "Firefox", "chrome": "Google Chrome", "edge": "Microsoft Edge", "brave": "Brave Browser",
+               "chromium": "Chromium", "opera": "Opera", "vivaldi": "Vivaldi", "safari": "Safari"},
+    "win32": {"firefox": "firefox", "chrome": "chrome", "edge": "msedge", "brave": "brave", "opera": "opera",
+              "vivaldi": "vivaldi"},
+}
+
+
+def open_in_browser(url: str, browser: str, is_default: bool) -> None:
+    """Open `url` in the given browser (falls back to the default browser)."""
+    if not is_default:
+        try:
+            if sys.platform == "darwin":
+                app = _BROWSER_COMMANDS["darwin"].get(browser)
+                if app:
+                    subprocess.Popen(["open", "-a", app, url])
+                    return
+            elif IS_WINDOWS:
+                exe = _BROWSER_COMMANDS["win32"].get(browser)
+                if exe:
+                    subprocess.Popen(["cmd", "/c", "start", "", exe, url], creationflags=0x08000000)
+                    return
+            else:
+                for cmd in _BROWSER_COMMANDS["linux"].get(browser, []):
+                    if shutil.which(cmd):
+                        subprocess.Popen([cmd, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                         start_new_session=True)
+                        return
+        except OSError:
+            pass
+    webbrowser.open(url)
+
+
 def _tracks(tracks) -> list[dict]:
     if not isinstance(tracks, list):
         raise ValueError("tracks must be a list")
@@ -31,6 +70,7 @@ def _tracks(tracks) -> list[dict]:
 class Api:
     def __init__(self, app):
         self.app = app
+        self._login_wait = None      # token of the browser sign-in being waited for
 
     @property
     def player(self):
@@ -229,21 +269,6 @@ class Api:
         self.app.bus.emit("account", {"signedIn": True})
         return info
 
-    def rpc_login_window(self):
-        self.app.start_login_window()
-
-    def rpc_login_cookies(self, cookies: dict, user_agent: str = ""):
-        """Called by the sign-in window with the YouTube cookies it captured."""
-        from .auth import headers_from_cookies
-        try:
-            info = self.rpc_login(headers_from_cookies(cookies, user_agent or None))
-        except ValueError as exc:
-            self.app.bus.emit("toast", {"message": str(exc), "kind": "error"})
-            raise
-        self.app.bus.emit("toast", {"message": f"Signed in as {info.get('name') or 'your account'}"})
-        self.app.raise_window()
-        return info
-
     def rpc_login_browsers(self):
         from .auth import installed_browsers
         return installed_browsers()
@@ -251,6 +276,49 @@ class Api:
     def rpc_login_browser(self, browser: str):
         from .auth import cookies_from_browser, headers_from_cookies
         return self.rpc_login(headers_from_cookies(cookies_from_browser(browser)))
+
+    def rpc_login_start(self, browser: str = ""):
+        """Sign in through a real browser (the default one unless named). Uses its YouTube login right
+        away when there is one; otherwise opens Google's sign-in page there and waits for it."""
+        from .auth import BROWSERS, LOGIN_URL, NotSignedIn, installed_browsers
+        found = installed_browsers()
+        if not browser:
+            if not found:
+                raise ValueError("No supported browser found. Use “Advanced: paste request headers” instead.")
+            browser = found[0]["id"]
+        label = BROWSERS.get(browser, (browser,))[0]
+        try:
+            info = self.rpc_login_browser(browser)
+            return {"status": "signed-in", "name": info.get("name")}
+        except NotSignedIn:
+            pass
+        self._login_wait = token = object()
+        open_in_browser(LOGIN_URL, browser, is_default=any(b["id"] == browser and b["default"] for b in found))
+        threading.Thread(target=self._wait_for_browser_login, args=(browser, label, token), daemon=True).start()
+        return {"status": "waiting", "browser": label}
+
+    def rpc_login_cancel(self):
+        self._login_wait = None
+
+    def _wait_for_browser_login(self, browser: str, label: str, token, timeout: float = 600) -> None:
+        from .auth import NotSignedIn
+        deadline = time.monotonic() + timeout
+        bus = self.app.bus
+        while time.monotonic() < deadline and self._login_wait is token:
+            time.sleep(3)          # Chromium writes new cookies to disk within a few seconds
+            try:
+                info = self.rpc_login_browser(browser)
+            except NotSignedIn:
+                continue
+            except ValueError as exc:
+                bus.emit("login", {"status": "error", "message": str(exc)})
+                return
+            bus.emit("login", {"status": "signed-in", "name": info.get("name")})
+            if self.app.viewer_running():
+                self.app.raise_window()
+            return
+        if self._login_wait is token:
+            bus.emit("login", {"status": "timeout", "message": f"Didn't see a sign-in in {label}. Try again."})
 
     def rpc_logout(self):
         self.app.ytm.logout()
@@ -345,7 +413,6 @@ class Api:
         if not url.startswith(("https://music.youtube.com/", "https://www.youtube.com/", "https://github.com/",
                                "https://lrclib.net/")):
             raise ValueError("URL not allowed")
-        import webbrowser
         webbrowser.open(url)
 
     def rpc_raise_window(self):

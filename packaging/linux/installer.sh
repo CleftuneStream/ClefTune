@@ -222,8 +222,20 @@ echo "$APP_NAME removed."
 EOF
   chmod +x "$ROOT/uninstall.sh"
   command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q "$APPS_DIR" || true
-  command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t "$ICON_DIR" 2>/dev/null || true
+  refresh_icon_caches
   rm -f "$TMP/icon.png"
+}
+
+refresh_icon_caches() {
+  # The icon keeps its name across versions, so desktops keep showing the old picture from their
+  # caches unless told otherwise (KDE Plasma especially).
+  touch "$ICON_DIR" "$ICON_DIR/256x256/apps" 2>/dev/null || true
+  command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -f -t "$ICON_DIR" 2>/dev/null || true
+  rm -f "${XDG_CACHE_HOME:-$HOME/.cache}/icon-cache.kcache"
+  for k in kbuildsycoca6 kbuildsycoca5; do
+    command -v "$k" >/dev/null 2>&1 && { "$k" --noincremental >/dev/null 2>&1 || true; break; }
+  done
+  command -v xdg-desktop-menu >/dev/null 2>&1 && xdg-desktop-menu forceupdate 2>/dev/null || true
 }
 
 remove_legacy_installs() {

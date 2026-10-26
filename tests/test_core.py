@@ -333,3 +333,113 @@ def test_old_metrolist_data_moves_to_cleftune(tmp_path):
     (new / "library.db").write_text("newer")
     _migrate(old, new)                                    # never overwrites an existing new folder
     assert (new / "library.db").read_text() == "newer"
+
+
+# ---------------------------------------------------------------- sign-in
+def test_cookie_headers_are_recognised_as_browser_login(tmp_path):
+    """ytmusicapi 1.12+ treats headers without a SAPISIDHASH Authorization line as OAuth and refuses them."""
+    import ytmusicapi
+    from ytmusicapi import YTMusic
+    from ytmusicapi.auth.auth_parse import determine_auth_type, parse_auth_str
+    from ytmusicapi.auth.types import AuthType
+    from cleftune.auth import headers_from_cookies
+    path = tmp_path / "auth.json"
+    ytmusicapi.setup(filepath=str(path), headers_raw=headers_from_cookies({"SAPISID": "abc", "SID": "x"}))
+    assert determine_auth_type(parse_auth_str(str(path))[0]) == AuthType.BROWSER
+    YTMusic(str(path))                        # used to raise "oauth_credentials not provided"
+
+
+def test_old_saved_login_is_repaired(tmp_path):
+    import json
+    from cleftune.config import Settings
+    from cleftune.ytm import YTM
+    ytm = YTM(Settings())
+    ytm.auth_path.write_text(json.dumps({"cookie": "SAPISID=abc; SID=x", "x-goog-authuser": "0",
+                                         "origin": "https://music.youtube.com"}))
+    ytm._repair_auth_file()
+    saved = json.loads(ytm.auth_path.read_text())
+    assert saved["authorization"].startswith("SAPISIDHASH ") and "__Secure-3PAPISID=abc" in saved["cookie"]
+
+
+def test_pasted_headers_get_authorization():
+    from cleftune.auth import complete_headers
+    out = complete_headers("cookie: SID=1; __Secure-3PAPISID=zz\nx-goog-authuser: 0")
+    assert "authorization: SAPISIDHASH " in out
+    already = "cookie: SAPISID=a\nauthorization: SAPISIDHASH 1_abc"
+    assert complete_headers(already) == already
+    with pytest.raises(ValueError):
+        complete_headers("cookie: SID=1")
+
+
+def test_default_browser_mapping(monkeypatch):
+    from cleftune import auth
+    monkeypatch.setattr(auth, "_os_key", lambda: "linux")
+    for desktop, expected in (("brave-browser", "brave"), ("firefox", "firefox"), ("org.mozilla.firefox", "firefox"),
+                              ("google-chrome", "chrome"), ("com.brave.Browser", "brave"), ("unknown", None)):
+        monkeypatch.setattr(auth, "_default_browser_key", lambda d=desktop: d.lower())
+        assert auth.default_browser() == expected
+    monkeypatch.setattr(auth, "_os_key", lambda: "win")
+    monkeypatch.setattr(auth, "_default_browser_key", lambda: "firefoxurl-308046b0af4a39cb")
+    assert auth.default_browser() == "firefox"
+
+
+def test_browser_login_waits_for_sign_in(monkeypatch):
+    """Not signed in yet: open the sign-in page in the browser, then pick the login up once it appears."""
+    from cleftune import api as api_mod, auth
+    from cleftune.events import EventBus
+    calls = {"n": 0}
+
+    def cookies(browser):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise auth.NotSignedIn("not yet")
+        return {"SAPISID": "abc"}
+
+    opened = []
+    monkeypatch.setattr(auth, "installed_browsers", lambda: [{"id": "brave", "label": "Brave", "default": True}])
+    monkeypatch.setattr(auth, "cookies_from_browser", cookies)
+    monkeypatch.setattr(api_mod, "open_in_browser", lambda url, b, is_default: opened.append((b, is_default)))
+    monkeypatch.setattr(api_mod.time, "sleep", lambda s: None)
+
+    class FakeYTM:
+        def login(self, headers):
+            assert "authorization: SAPISIDHASH" in headers
+            return {"name": "Me"}
+
+    class FakeApp:
+        bus, ytm = EventBus(), FakeYTM()
+        resolver = type("R", (), {"clear": lambda self: None})()
+        viewer_running = staticmethod(lambda: False)
+
+    app = FakeApp()
+    events = []
+    app.bus.listen(lambda kind, data: events.append((kind, data)))
+    a = api_mod.Api(app)
+    assert a.rpc_login_start() == {"status": "waiting", "browser": "Brave"}
+    assert opened == [("brave", True)]
+    for _ in range(200):
+        if ("login", {"status": "signed-in", "name": "Me"}) in events:
+            break
+        time.sleep(0.01)
+    assert calls["n"] == 3 and ("login", {"status": "signed-in", "name": "Me"}) in events
+
+
+# ---------------------------------------------------------------- search & streams
+def test_parse_count():
+    assert models.parse_count("7B") == 7_000_000_000
+    assert models.parse_count("1.2M") == 1_200_000
+    assert models.parse_count("155K") == 155_000
+    assert models.parse_count("1,234") == 1234
+    assert models.parse_count(None) is None and models.parse_count("n/a") is None
+
+
+def test_search_ranks_matching_songs_by_popularity():
+    items = [dict(song("a"), title="Believer (Live)", views=155_000), dict(song("b"), title="Believe", views=799_000_000),
+             dict(song("c"), title="Believer", views=7_000_000_000), dict(song("d"), title="Believer remix")]
+    assert [t["videoId"] for t in models.rank_by_popularity(items, "believer")] == ["c", "a", "d", "b"]
+
+
+def test_fast_path_uses_a_client_yt_dlp_supports():
+    from yt_dlp.extractor.youtube._base import INNERTUBE_CLIENTS
+    from cleftune.streams import fast_path_client
+    assert fast_path_client() in INNERTUBE_CLIENTS

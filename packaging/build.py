@@ -59,6 +59,8 @@ def pyinstaller(name: str, script: Path, extra: list) -> Path:
     ]
     if IS_MAC:
         args += ["--osx-bundle-identifier", f"{APP_ID}.{name.lower()}"]
+    elif not IS_WIN:
+        args += ["--strip"]                # drop debug symbols: the FFmpeg libs alone shrink by ~30 MB
     run(args + extra)
     return BUILD / "dist" / (f"{name}.app" if IS_MAC else name)
 

@@ -61,6 +61,8 @@ class YTM:
         if location:
             kwargs["location"] = location.upper()
         auth = str(self.auth_path) if self.auth_path.exists() else None
+        if auth:
+            self._repair_auth_file()
         try:
             return YTMusic(auth, **kwargs)
         except Exception:
@@ -77,11 +79,30 @@ class YTM:
     def authenticated(self) -> bool:
         return self.auth_path.exists()
 
+    def _repair_auth_file(self) -> None:
+        """Logins saved by older versions lack the Authorization header, which makes ytmusicapi 1.12+
+        mistake them for OAuth tokens ("oauth_credentials not provided")."""
+        from .auth import sapisid_hash
+        try:
+            headers = json.loads(self.auth_path.read_text(encoding="utf-8"))
+            if any(k.lower() == "authorization" for k in headers):
+                return
+            cookie = next(v for k, v in headers.items() if k.lower() == "cookie")
+            sapisid = next(p.split("=", 1)[1] for p in (x.strip() for x in cookie.split(";"))
+                           if p.startswith(("__Secure-3PAPISID=", "SAPISID=")))
+            if "__Secure-3PAPISID=" not in cookie:
+                headers["cookie"] = f"{cookie}; __Secure-3PAPISID={sapisid}"
+            headers["authorization"] = sapisid_hash(sapisid)
+            self.auth_path.write_text(json.dumps(headers, ensure_ascii=True, indent=4), encoding="utf-8")
+        except (OSError, ValueError, StopIteration):
+            pass
+
     def login(self, headers_raw: str) -> dict:
+        from .auth import complete_headers
         if "cookie" not in headers_raw.lower():
             raise ValueError("The pasted headers have no Cookie line. Copy the request headers of a "
                              "music.youtube.com 'browse' request while signed in.")
-        ytmusicapi.setup(filepath=str(self.auth_path), headers_raw=headers_raw)
+        ytmusicapi.setup(filepath=str(self.auth_path), headers_raw=complete_headers(headers_raw))
         self.reset()
         try:
             return self.account_info()
@@ -161,16 +182,21 @@ class YTM:
         filters = {"songs": "songs", "videos": "videos", "albums": "albums",
                    "artists": "artists", "playlists": "playlists"}
         results = self.client.search(query, filter=filters.get(kind or ""), limit=40)
-        top, songs, cards = None, [], []
+        top, songs, cards, seen = None, [], [], set()
         for raw in results:
             item = models.from_search(raw)
             if not item:
                 continue
+            key = (item["type"], item.get("videoId") or item.get("id"))
+            if key in seen:            # later result pages repeat items
+                continue
+            seen.add(key)
             if raw.get("category") == "Top result" and top is None:
                 top = item
                 continue
             (songs if item["type"] == "song" else cards).append(item)
-        return {"top": top, "songs": songs, "cards": cards}
+        # YouTube Music's own order mixes in remixes, covers and live cuts; put the hits first
+        return {"top": top, "songs": models.rank_by_popularity(songs, query), "cards": cards}
 
     def suggestions(self, query: str) -> list[str]:
         if not query.strip():

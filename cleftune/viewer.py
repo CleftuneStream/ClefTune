@@ -5,7 +5,6 @@ core app works without it. Linux uses Qt WebEngine (fully bundled, no system pac
 Windows and macOS use pywebview on the OS's own engine (WebView2 / WKWebView).
 
     ClefTuneWindow --url http://127.0.0.1:PORT/ --token TOKEN          the app window
-    ClefTuneWindow --login --url ... --token ...                       Google sign-in window
 
 Closing the window hides it (music keeps playing in the app); a tray icon, launching the app
 again, or the in-app Quit bring it back or shut everything down.
@@ -24,13 +23,9 @@ import time
 import urllib.request
 from pathlib import Path
 
-from .auth import LOGIN_URL, has_login
 from .config import data_dir
 
 TITLE = "ClefTune"
-CHROME_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
-SAFARI_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) "
-             "Version/18.0 Safari/605.1.15")
 log = logging.getLogger("cleftune.viewer")
 
 
@@ -229,66 +224,6 @@ def run_qt(link: AppLink, url: str, storage: Path) -> int:
     return app.exec()
 
 
-def run_qt_login(link: AppLink) -> int:
-    from PySide6.QtCore import QObject, QTimer, QUrl, Signal
-    from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
-    from PySide6.QtWebEngineWidgets import QWebEngineView
-    from PySide6.QtWidgets import QMessageBox
-
-    app = _qt_app()
-    profile = QWebEngineProfile(app)                 # private: nothing of the Google session is kept on disk
-    profile.setHttpUserAgent(CHROME_UA)
-    cookies: dict = {}
-    profile.cookieStore().cookieAdded.connect(
-        lambda c: c.domain().lstrip(".").endswith("youtube.com") and
-        cookies.__setitem__(bytes(c.name()).decode(), bytes(c.value()).decode()))
-    view = QWebEngineView()
-    page = QWebEnginePage(profile, view)
-    view.setPage(page)
-    page.urlChanged.connect(lambda u: log.info("sign-in page: %s%s", u.host(), u.path()))
-    view.setWindowTitle("Sign in to YouTube Music – ClefTune")
-    view.resize(520, 760)
-    view.load(QUrl(LOGIN_URL))
-    view.show()
-
-    class Bridge(QObject):
-        done = Signal(str)
-
-    bridge = Bridge()
-    state = {"sent": False}
-
-    def finish(error: str) -> None:
-        if error:
-            QMessageBox.warning(view, TITLE, error)
-            state["sent"] = False
-            return
-        app.quit()
-    bridge.done.connect(finish)
-
-    def check() -> None:
-        if state["sent"] or "music.youtube.com" not in page.url().host() or not has_login(cookies):
-            return
-        state["sent"] = True
-
-        def send():
-            try:
-                link.call("login_cookies", cookies=dict(cookies), user_agent=CHROME_UA)
-                bridge.done.emit("")
-            except Exception as exc:
-                bridge.done.emit(f"Sign-in didn't work: {exc}")
-        threading.Thread(target=send, daemon=True).start()
-
-    timer = QTimer()
-    timer.timeout.connect(check)
-    timer.start(700)
-
-    def cleanup():
-        view.setPage(None)
-        page.deleteLater()
-    app.aboutToQuit.connect(cleanup)
-    return app.exec()
-
-
 # ----------------------------------------------------------------------------------- pywebview
 def _start_windows_tray(link: AppLink, show) -> object | None:
     if not sys.platform.startswith("win"):
@@ -360,40 +295,10 @@ def run_pywebview(link: AppLink, url: str, storage: Path, debug: bool) -> int:
     return 0
 
 
-def run_pywebview_login(link: AppLink) -> int:
-    import webview
-
-    window = webview.create_window("Sign in to YouTube Music – ClefTune", LOGIN_URL, width=520, height=760)
-
-    def poll():
-        while True:
-            time.sleep(1)
-            try:
-                if "music.youtube.com" not in (window.get_current_url() or ""):
-                    continue
-                cookies = {}
-                for jar in window.get_cookies() or []:
-                    for name, morsel in jar.items():
-                        if (morsel["domain"] or "").lstrip(".").endswith("youtube.com"):
-                            cookies[name] = morsel.value
-                if has_login(cookies):
-                    link.call("login_cookies", cookies=cookies, user_agent="")
-                    window.destroy()
-                    return
-            except Exception as exc:
-                log.warning("sign-in check failed: %s", exc)
-
-    ua = SAFARI_UA if sys.platform == "darwin" else None
-    gui = "edgechromium" if sys.platform.startswith("win") else ("cocoa" if sys.platform == "darwin" else None)
-    webview.start(poll, gui=gui, private_mode=True, user_agent=ua)
-    return 0
-
-
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="ClefTuneWindow")
     parser.add_argument("--url", required=True)
     parser.add_argument("--token", required=True)
-    parser.add_argument("--login", action="store_true", help="show the Google sign-in window")
     parser.add_argument("--backend", choices=["auto", "qt", "pywebview"], default="auto")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args(argv)
@@ -408,16 +313,13 @@ def main(argv=None) -> int:
         return 2
     link = AppLink(args.url, args.token)
 
-    if args.login:
-        backends = {"qt": lambda: run_qt_login(link), "pywebview": lambda: run_pywebview_login(link)}
-    else:
-        backends = {"qt": lambda: run_qt(link, args.url, storage),
-                    "pywebview": lambda: run_pywebview(link, args.url, storage, args.debug)}
+    backends = {"qt": lambda: run_qt(link, args.url, storage),
+                "pywebview": lambda: run_pywebview(link, args.url, storage, args.debug)}
     order = [args.backend] if args.backend != "auto" else (
         ["qt", "pywebview"] if sys.platform.startswith("linux") else ["pywebview"])
     for name in order:
         try:
-            log.info("starting %s %s", name, "sign-in window" if args.login else "window")
+            log.info("starting %s window", name)
             return backends[name]()
         except ImportError as exc:
             log.info("%s backend unavailable: %s", name, exc)
