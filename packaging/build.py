@@ -166,7 +166,8 @@ def finish_mac_bundle(app: Path, background_only: bool) -> None:
     if background_only:
         info["LSUIElement"] = True     # the core has no window of its own; the window add-on is the Dock app
     plist_path.write_bytes(plistlib.dumps(info))
-    identity = os.environ.get("MACOS_SIGN_IDENTITY", "-")   # "-" = ad-hoc (required on Apple Silicon)
+    # "-" = ad-hoc (required on Apple Silicon). CI passes unset secrets as "", so treat empty as unset.
+    identity = os.environ.get("MACOS_SIGN_IDENTITY") or "-"
     cmd = ["codesign", "--force", "--deep", "--sign", identity]
     if identity != "-":
         cmd += ["--options", "runtime", "--timestamp", "--entitlements", PACKAGING / "macos" / "entitlements.plist"]
