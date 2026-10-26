@@ -195,7 +195,7 @@ def main() -> None:
     args = parser.parse_args()
 
     sys.path.insert(0, str(PACKAGING))
-    import make_icons                      # every icon comes from assets/logo.png
+    import make_icons                      # every icon comes from assets/clef.png
     make_icons.main()
     core, window = build_core(), build_window()
     bundle_deno(core)

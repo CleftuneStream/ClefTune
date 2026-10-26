@@ -1,9 +1,9 @@
-"""Generate every app icon from the one logo: assets/logo.png (square, ideally 1024 px).
+"""Generate every app icon from the one logo: assets/clef.png (square, ideally 1024 px).
 
     python packaging/make_icons.py
 
 Writes cleftune/web/icon.png (UI, window, Linux menu), icon.ico (Windows) and icon.icns (macOS).
-packaging/build.py runs this automatically, so replacing assets/logo.png is all a rebrand needs.
+packaging/build.py runs this automatically, so replacing assets/clef.png is all a rebrand needs.
 """
 
 from pathlib import Path
@@ -11,7 +11,7 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
-LOGO = ROOT / "assets" / "logo.png"
+LOGO = ROOT / "assets" / "clef.png"
 WEB = ROOT / "cleftune" / "web"
 
 
