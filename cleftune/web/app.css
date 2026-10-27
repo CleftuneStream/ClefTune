@@ -285,9 +285,18 @@ ol.steps { margin: 8px 0; padding-left: 20px; color: var(--text-2); line-height:
 .lyrics-offset { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
 .lyrics-offset .btn.small { height: 26px; padding: 0 9px; font-size: 12px; }
 #panel-body, .np-right { position: relative; }
-.lyrics .line .word { transition: color .15s; }
+.lyrics .line .word { transition: color .15s; border-radius: 4px; }
+.lyrics .line .word:hover { color: var(--text-2); }
 .lyrics .line.active.has-words { color: var(--text-3); }
 .lyrics .line.active .word.sung { color: var(--text); }
+/* the word being sung fills left to right (--p set every frame), with a soft edge and an accent glow on the beat */
+.lyrics .line.active .word.now {
+  color: transparent;
+  background: linear-gradient(90deg, var(--text) calc(var(--p, 0%) - 6%), color-mix(in srgb, var(--accent) 70%, var(--text)) var(--p, 0%), var(--text-3) calc(var(--p, 0%) + 6%));
+  -webkit-background-clip: text; background-clip: text;
+  animation: word-hit .35s ease-out;
+}
+@keyframes word-hit { from { text-shadow: 0 0 22px color-mix(in srgb, var(--accent) 85%, transparent); } }
 details.advanced summary { cursor: pointer; color: var(--text-2); font-size: 13px; }
 details.advanced[open] summary { margin-bottom: 8px; }
 
@@ -349,7 +358,7 @@ details.advanced[open] summary { margin-bottom: 8px; }
 .login-status[hidden] { display: none; }
 .login-status > div:nth-child(2) { flex: 1; min-width: 0; }
 .spinner.small { width: 22px; height: 22px; border-width: 2px; flex: none; }
-@media (prefers-reduced-motion: reduce) { .np, .np-art, .lyrics .line { animation: none; transition: none; } }
+@media (prefers-reduced-motion: reduce) { .np, .np-art, .lyrics .line, .lyrics .line .word { animation: none; transition: none; } }
 
 /* ---------- player bar ---------- */
 #playerbar {

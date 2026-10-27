@@ -1145,7 +1145,10 @@ async function settingsView() {
         setRow("Resume where you left off", "Restore the queue on startup.", switchInput(settings.restore_session, set("restore_session")))),
       h("div", { class: "set-group" }, h("h2", null, "Appearance"),
         setRow("Theme", null, selectInput(settings.theme, [["dark", "Dark"], ["light", "Light"], ["system", "System"]], set("theme"))),
-        setRow("Colors from album art", "Accent color follows the current song.", switchInput(settings.dynamic_color, v => { saveSetting({ dynamic_color: v }).then(() => applyDynamicColor(S.state?.current?.thumbnail)); }))),
+        setRow("Colors from album art", "Accent color follows the current song.", switchInput(settings.dynamic_color, v => { saveSetting({ dynamic_color: v }).then(() => applyDynamicColor(S.state?.current?.thumbnail)); })),
+        setRow("Word-by-word lyrics", "Light up each word as it's sung. Uses real word timing when the lyrics have it; otherwise ClefTune paces the words by syllable.",
+          selectInput(settings.lyrics_words, [["auto", "On (estimate when needed)"], ["exact", "Only with real word timing"], ["off", "Off (whole lines)"]],
+            v => saveSetting({ lyrics_words: v }).then(() => { S.lyrics = null; S.lyricsFor = null; S.lyricIndex = -1; if (S.panel === "lyrics") renderPanel(); })))),
       h("div", { class: "set-group" }, h("h2", null, "Content"),
         setRow("Language", "Language of YouTube Music pages.", selectInput(settings.language, [["en", "English"], ["hi", "हिन्दी"], ["es", "Español"], ["fr", "Français"], ["de", "Deutsch"], ["pt", "Português"], ["it", "Italiano"], ["ja", "日本語"], ["ko", "한국어"], ["ru", "Русский"], ["tr", "Türkçe"], ["ar", "العربية"], ["nl", "Nederlands"], ["ur", "اردو"], ["zh_CN", "中文 (简体)"], ["zh_TW", "中文 (繁體)"]], set("language"))),
         setRow("Region", "Two-letter country code for charts and recommendations (empty = automatic).",
@@ -1329,9 +1332,13 @@ function renderLyricsInto(container) {
     container.replaceChildren(h("div", { class: "center-msg" }, icon("lyrics", 40), L?.error ? "Couldn't load lyrics." : "No lyrics found for this song."));
     return;
   }
-  const lineEl = (ln, i) => h("div", { class: "line" + (ln.text ? "" : " blank") + (ln.words ? " has-words" : ""), dataset: { i },
-      onclick: () => { const pos = Math.max(0, ln.t - (S.lyrics.offset || 0)); S.pos = pos; S.posAt = performance.now(); call("seek", { pos }); } },
-    ln.words ? ln.words.map(w => h("span", { class: "word" }, w.text)) : (ln.text || "♪"));
+  const seekTo = t => { const pos = Math.max(0, t - (S.lyrics.offset || 0)); S.pos = pos; S.posAt = performance.now(); call("seek", { pos }); };
+  const showWords = S.settings?.lyrics_words !== "off";
+  const lineEl = (ln, i) => {
+    const words = showWords && ln.words;
+    return h("div", { class: "line" + (ln.text ? "" : " blank") + (words ? " has-words" : ""), dataset: { i }, onclick: () => seekTo(ln.t) },
+      words ? words.map(w => h("span", { class: "word", onclick: e => { e.stopPropagation(); seekTo(w.t); } }, w.text)) : (ln.text || "♪"));
+  };
   const box = L.synced
     ? h("div", { class: "lyrics synced" }, L.lines.map(lineEl))
     : h("div", { class: "lyrics plain" }, L.text.split("\n").map(t => h("div", { class: "line" + (t.trim() ? "" : " blank") }, t)));
@@ -1344,7 +1351,8 @@ function renderLyricsInto(container) {
   };
   paintOffset();
   const head = h("div", { class: "lyrics-head" },
-    L.source ? h("span", { class: "lyrics-src" }, `Lyrics from ${L.source}`) : h("span"),
+    L.source ? h("span", { class: "lyrics-src", title: L.wordSync === "estimated" ? "These lyrics only have line timing, so the words are paced by syllables" : null },
+      `Lyrics from ${L.source}`, showWords && L.wordSync === "exact" ? " · word-synced" : showWords && L.wordSync === "estimated" ? " · word timing estimated" : "") : h("span"),
     L.synced ? h("span", { class: "lyrics-offset", title: "If the words are early or late, shift them" },
       h("button", { class: "btn small", title: "Lyrics are early: delay them", onclick: () => nudge(-0.25) }, "−0.25s"),
       offsetLabel,
@@ -1374,28 +1382,48 @@ function updateLyricHighlight(pos, force = false) {
   let idx = -1;
   let lo = 0, hi = L.lines.length - 1;
   while (lo <= hi) { const mid = (lo + hi) >> 1; if (L.lines[mid].t <= t) { idx = mid; lo = mid + 1; } else hi = mid - 1; }
-  const words = idx >= 0 ? L.lines[idx].words : null;
-  const wordIdx = words ? words.filter(w => w.t <= t).length - 1 : -1;
-  if (idx === S.lyricIndex && wordIdx === S.wordIndex && !force) return;
+  const words = idx >= 0 && S.settings?.lyrics_words !== "off" ? L.lines[idx].words : null;
+  let wordIdx = -1;
+  if (words) for (let i = 0; i < words.length && words[i].t <= t; i++) wordIdx = i;
   const lineChanged = idx !== S.lyricIndex || force;
-  S.lyricIndex = idx; S.wordIndex = wordIdx;
-  document.querySelectorAll(".lyrics.synced").forEach(box => {
-    if (lineChanged) {
-      box.querySelectorAll(".line").forEach((el, i) => { el.classList.toggle("active", i === idx); el.classList.toggle("past", i < idx); });
-    }
-    const active = box.querySelector(".line.active");
-    if (active && words) active.querySelectorAll(".word").forEach((w, i) => w.classList.toggle("sung", i <= wordIdx));
-    if (active && lineChanged) {
-      // centre the active line inside its own scroller (never scrolls the whole page)
-      const scroller = box.closest("#panel-body, .np-right");
-      const following = force || !S.lyricsFollowAt || performance.now() > S.lyricsFollowAt;
-      if (following) scroller?.querySelector(".lyrics-resync")?.setAttribute("hidden", "");
-      if (scroller && following) {
-        const target = active.offsetTop - scroller.clientHeight / 2 + active.clientHeight / 2;
-        scroller.scrollTo({ top: target, behavior: force ? "auto" : "smooth" });
+  if (lineChanged || wordIdx !== S.wordIndex) {
+    S.lyricIndex = idx; S.wordIndex = wordIdx; S.wordEls = []; S.wordP = -1;
+    document.querySelectorAll(".lyrics.synced").forEach(box => {
+      if (lineChanged) {
+        box.querySelectorAll(".line").forEach((el, i) => { el.classList.toggle("active", i === idx); el.classList.toggle("past", i < idx); });
+        box.querySelectorAll(".word.now, .word.sung").forEach(w => { w.classList.remove("now", "sung"); w.style.removeProperty("--p"); });
       }
+      const active = box.querySelector(".line.active");
+      if (active && words) {
+        const els = [...active.querySelectorAll(".word")];
+        els.forEach((w, i) => {
+          w.classList.toggle("sung", i < wordIdx);
+          w.classList.toggle("now", i === wordIdx);
+          if (i !== wordIdx) w.style.removeProperty("--p");
+        });
+        S.wordEls.push(els);
+      }
+      if (active && lineChanged) {
+        // centre the active line inside its own scroller (never scrolls the whole page)
+        const scroller = box.closest("#panel-body, .np-right");
+        const following = force || !S.lyricsFollowAt || performance.now() > S.lyricsFollowAt;
+        if (following) scroller?.querySelector(".lyrics-resync")?.setAttribute("hidden", "");
+        if (scroller && following) {
+          const target = active.offsetTop - scroller.clientHeight / 2 + active.clientHeight / 2;
+          scroller.scrollTo({ top: target, behavior: force ? "auto" : "smooth" });
+        }
+      }
+    });
+  }
+  // the word being sung fills from left to right over its own duration
+  if (words && wordIdx >= 0 && S.wordEls?.length) {
+    const w = words[wordIdx];
+    const p = Math.round(Math.min(1, Math.max(0, (t - w.t) / Math.max(0.05, w.d || 0.3))) * 100);
+    if (p !== S.wordP) {
+      S.wordP = p;
+      for (const els of S.wordEls) els[wordIdx]?.style.setProperty("--p", p + "%");
     }
-  });
+  }
 }
 
 function onTrackChanged() {

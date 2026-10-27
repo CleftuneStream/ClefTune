@@ -6,7 +6,10 @@ import pytest
 from cleftune import models
 from cleftune.events import EventBus
 from cleftune.library import Library
-from cleftune.lyrics import LyricsService, clean_title, parse_lrc
+import zlib
+
+from cleftune import lyrics as lyrics_mod
+from cleftune.lyrics import LyricsService, clean_title, decode_krc, estimate_words, parse_krc, parse_lrc, prepare, same_lyrics
 from cleftune.player import Player
 from cleftune.streams import StreamInfo
 
@@ -267,6 +270,95 @@ def test_enhanced_lrc_word_timing():
     line = parse_lrc("[00:12.00]<00:12.00>Hello <00:12.50>dark<00:13.10>ness")[0]
     assert line["text"] == "Hello darkness"
     assert [w["t"] for w in line["words"]] == [12.0, 12.5, 13.1]
+
+
+def test_krc_decode_and_parse():
+    krc = "[id:$0]\n[ti:Song]\n[9551,2435]<0,236,0>The <236,487,0>club <723,271,0>isn't\n[11996,1990]<0,221,0>So <221,223,0>the"
+    raw = zlib.compress(krc.encode("utf-8"))
+    blob = b"krc1" + bytes(b ^ lyrics_mod._KRC_KEY[i % 16] for i, b in enumerate(raw))
+    lines = parse_krc(decode_krc(blob))
+    assert [l["text"] for l in lines] == ["The club isn't", "So the"]
+    words = lines[0]["words"]
+    assert [w["t"] for w in words] == [9.551, 9.787, 10.274]
+    assert [w["d"] for w in words] == [0.236, 0.487, 0.271]
+    assert "".join(w["text"] for w in words) == "The club isn't"
+    with pytest.raises(ValueError):
+        decode_krc(b"nope")
+
+
+def test_estimate_words_paces_by_syllable_and_holds_long_gaps():
+    lines = [{"t": 10.0, "text": "Hello beautiful world"}, {"t": 30.0, "text": "next"}]
+    assert estimate_words(lines)
+    words = lines[0]["words"]
+    assert "".join(w["text"] for w in words) == "Hello beautiful world"
+    assert words[0]["t"] == 10.0 and words[1]["t"] < words[2]["t"]
+    # "beautiful" (3 syllables) lasts longer than "world" (1)
+    assert words[1]["d"] > words[2]["d"]
+    # a 20 s instrumental gap doesn't stretch the line: it's sung at a normal pace
+    assert words[-1]["t"] + words[-1]["d"] < 13.0
+
+
+def test_estimate_words_splits_cjk_and_fits_short_gaps():
+    lines = [{"t": 0.0, "text": "你好世界"}, {"t": 1.0, "text": "x"}]
+    estimate_words(lines)
+    words = lines[0]["words"]
+    assert [w["text"] for w in words] == ["你", "好", "世", "界"]
+    assert words[-1]["t"] + words[-1]["d"] <= 1.0
+
+
+def test_prepare_marks_word_sync_and_keeps_cache_untouched():
+    stored = {"source": "LRCLIB", "synced": True, "text": "", "lines": [{"t": 1.0, "text": "one two"}, {"t": 3.0, "text": "three"}]}
+    assert prepare(stored, estimate=True)["wordSync"] == "estimated"
+    assert "words" not in stored["lines"][0]                     # the cached copy stays line-only
+    assert prepare(stored, estimate=False)["wordSync"] is None
+    exact = {"source": "x", "synced": True, "text": "", "lines": parse_lrc("[00:01.00]<00:01.00>a <00:01.40>b\n[00:03.00]c")}
+    out = prepare(exact, estimate=True)
+    assert out["wordSync"] == "exact"
+    assert out["lines"][0]["words"][0]["d"] == pytest.approx(0.4)   # enhanced LRC gets durations
+    assert "words" in out["lines"][1]                              # lines without timing still get estimates
+
+
+def test_same_lyrics_requires_matching_text_and_timing():
+    a = [{"t": 10.0 + i * 4, "text": f"line number {i}"} for i in range(10)]
+    near = [{"t": l["t"] + 0.4, "text": l["text"].upper() + "!"} for l in a]
+    late = [{"t": l["t"] + 6, "text": l["text"]} for l in a]
+    other = [{"t": l["t"], "text": f"different {i}"} for i, l in enumerate(a)]
+    assert same_lyrics(a, near)
+    assert not same_lyrics(a, late)
+    chorus = [{"t": t, "text": "the chorus"} for t in (10.0, 40.0, 70.0)] + [{"t": 20.0, "text": "verse"}]
+    assert same_lyrics(chorus, [dict(l, t=l["t"] + 0.3) for l in chorus])   # repeats match their own occurrence
+    assert not same_lyrics(a, other)
+
+
+def test_line_synced_lyrics_borrow_kugou_word_timing(tmp_path):
+    svc = LyricsService(ytm=None)
+    lrc_lines = [{"t": 10.0 + i * 4, "text": f"line number {i}"} for i in range(6)]
+    kugou_lines = [{"t": l["t"], "text": l["text"], "words": [{"t": l["t"], "d": 0.5, "text": l["text"]}]} for l in lrc_lines]
+    svc._lrclib = lambda t: {"source": "LRCLIB", "synced": True, "lines": lrc_lines, "text": ""}
+    svc._kugou = lambda t: {"source": "KuGou", "synced": True, "lines": kugou_lines, "text": ""}
+    out = svc.get(song("wordsync001"))
+    assert out["source"] == "KuGou" and out["wordSync"] == "exact"
+    # a mismatched KuGou copy is ignored and the words are estimated instead
+    svc2 = LyricsService(ytm=None)
+    svc2._lrclib = svc._lrclib
+    svc2._kugou = lambda t: {"source": "KuGou", "synced": True, "text": "",
+                             "lines": [{"t": 0.0, "text": f"other {i}", "words": [{"t": 0.0, "d": 1, "text": "x"}]} for i in range(6)]}
+    out2 = svc2.get(song("wordsync002"))
+    assert out2["source"] == "LRCLIB" and out2["wordSync"] == "estimated"
+
+
+def test_stored_lyrics_from_older_versions_are_refreshed(tmp_path):
+    svc = LyricsService(ytm=None)
+    (svc.folder / "oldformat01.json").write_text('{"source": "KuGou", "synced": true, "lines": [{"t": 1, "text": "old"}], "text": ""}')
+    svc._lrclib = lambda t: None
+    svc._ytm = lambda vid: None
+    svc._kugou = lambda t: None                                  # offline: keep the old copy
+    assert svc.get(song("oldformat01"))["lines"][0]["text"] == "old"
+    svc._cache.clear()
+    svc._kugou = lambda t: {"source": "KuGou", "synced": True, "text": "",
+                            "lines": [{"t": 1, "text": "new", "words": [{"t": 1, "d": 1, "text": "new"}]}]}
+    assert svc.get(song("oldformat01"))["lines"][0]["text"] == "new"
+    assert '"v": 2' in (svc.folder / "oldformat01.json").read_text()
 
 
 def test_repeat_one_loops_inside_engine(tmp_path):

@@ -118,7 +118,8 @@ class Api:
 
     def rpc_lyrics(self, track: dict):
         track = _track(track)
-        return self.app.lyrics.get(track) | {"offset": self.app.library.lyrics_offset(track["videoId"])}
+        estimate = self.app.settings.get("lyrics_words") == "auto"
+        return self.app.lyrics.get(track, estimate) | {"offset": self.app.library.lyrics_offset(track["videoId"])}
 
     def rpc_lyrics_offset(self, videoId: str, offset: float):
         offset = max(-10.0, min(10.0, round(float(offset), 2)))

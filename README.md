@@ -40,7 +40,7 @@ Audio plays inside the app itself, not in a browser tab, so closing the window k
 A new song is resolved in about half a second. The next songs in the queue, and the one under your pointer, are prepared ahead of time, so they start almost instantly.
 
 **🎤 Lyrics, properly**<br>
-Time-synced lyrics from LRCLIB, YouTube Music and KuGou, with word-by-word highlighting, click-to-seek and per-song timing nudges.
+Time-synced lyrics from LRCLIB, YouTube Music and KuGou. Each word lights up as it's sung, with click-to-seek and per-song timing nudges.
 
 </td>
 <td width="50%" valign="top">
@@ -94,7 +94,7 @@ Your downloaded music in `Music/ClefTune` is never deleted.
 | **Search**               | Live suggestions; filters for songs, videos, albums, artists and playlists; top result; songs ranked by popularity with duplicates removed                                                                          |
 | **Now Playing**          | Full-screen player over a blurred album-art backdrop: large artwork, its own seek bar and controls, and synced lyrics alongside                                                                                     |
 | **Playback**             | Shuffle, repeat / gapless repeat-one, drag-to-reorder queue, autoplay radio, sleep timer, resume where you left off                                                                                                 |
-| **Lyrics**               | Synced from LRCLIB → YouTube Music → KuGou, plain text as a fallback. Word-by-word highlighting, click a line to seek, ±0.25 s timing per song. Auto-scroll pauses while you scroll yourself. Saved for offline use |
+| **Lyrics**               | Synced from LRCLIB → YouTube Music → KuGou, plain text as a fallback. Karaoke-style word-by-word fill using real word timing (KuGou KRC, enhanced LRC) when available, otherwise paced by syllable (_Settings → Appearance → Word-by-word lyrics_). Click a line or word to seek, ±0.25 s timing per song. Auto-scroll pauses while you scroll yourself. Saved for offline use |
 | **Cache**                | Your last 50 played songs (adjustable) stay on disk, so they play instantly and offline                                                                                                                             |
 | **Library**              | Liked songs, your own playlists, saved albums/artists/playlists, listening history, 30-day stats                                                                                                                    |
 | **Downloads**            | Permanent offline copies in `Music/ClefTune`, tagged with cover art when ffmpeg is available                                                                                                                        |
@@ -221,7 +221,7 @@ Logs are `cleftune.log` and `window.log` in the library folder.
 
 PyInstaller can't cross-compile, so each installer is built on its own OS.
 
-- **All at once:** push a tag like `v1.0.0` (or run the _Installers_ workflow). `.github/workflows/installers.yml` builds Windows, macOS (Apple Silicon and Intel) and Linux, then attaches them to a GitHub release.
+- **All at once:** bump the version in `cleftune/__init__.py` and `pyproject.toml`, push, then run _Actions → Installers → Run workflow_ (or push a tag like `v1.2.0`). `.github/workflows/installers.yml` builds Windows, macOS (Apple Silicon and Intel) and Linux, creates the `v<version>` tag and release with a `SHA256SUMS.txt`, and marks it as the latest release. Re-running for the same version and commit replaces the files; tick _draft_ to review before publishing.
 - **Locally**, on the OS you're targeting:
 
   ```bash

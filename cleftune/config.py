@@ -106,6 +106,7 @@ DEFAULTS: dict = {
     "skip_on_error": True,
     "theme": "dark",             # dark | light | system
     "dynamic_color": True,       # accent color taken from the album art
+    "lyrics_words": "auto",      # auto (estimate when needed) | exact (source timing only) | off
     "language": "en",
     "location": "",              # two-letter region code, empty = automatic
     "download_dir": "",          # empty = default_download_dir()

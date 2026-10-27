@@ -1,16 +1,67 @@
-# Builds the Windows, macOS and Linux installers on their own operating systems
-# (PyInstaller can't cross-compile). Run it from the Actions tab, or push a tag like v1.0.0
-# to also publish a GitHub release with all installers attached.
+# Builds the Windows, macOS and Linux installers on their own operating systems (PyInstaller
+# can't cross-compile) and publishes them as the latest GitHub release.
+#
+# Run it from the Actions tab (Installers → Run workflow), or push a tag like v1.2.0.
+# The version comes from cleftune/__init__.py (it must match pyproject.toml); the release and
+# its tag v<version> are created automatically. Running again for the same version on the same
+# commit replaces the release's files; a new commit needs a new version number.
 
 name: Installers
 
 on:
   workflow_dispatch:
+    inputs:
+      draft:
+        description: "Create the release as a draft, to review before publishing"
+        type: boolean
+        default: false
   push:
     tags: ["v*"]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: installers-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  version:
+    name: Check version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: v
+        name: Read version and check the tag is free
+        run: |
+          app=$(sed -nE 's/^__version__ = "([^"]+)".*/\1/p' cleftune/__init__.py)
+          proj=$(sed -nE 's/^version = "([^"]+)".*/\1/p' pyproject.toml)
+          if [ -z "$app" ] || [ "$app" != "$proj" ]; then
+            echo "::error::Version mismatch: cleftune/__init__.py says '$app' but pyproject.toml says '$proj'. Make them the same."
+            exit 1
+          fi
+          tag="v$app"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "$tag" ]; then
+            echo "::error::Pushed tag $GITHUB_REF_NAME doesn't match the app version $app (expected $tag)."
+            exit 1
+          fi
+          # the commit an existing tag points to (peeled, so annotated tags work too)
+          existing=$(git ls-remote origin "refs/tags/$tag^{}" | cut -f1)
+          [ -n "$existing" ] || existing=$(git ls-remote origin "refs/tags/$tag" | cut -f1)
+          if [ -n "$existing" ] && [ "$existing" != "$GITHUB_SHA" ]; then
+            echo "::error::$tag already exists at ${existing:0:7}, but this run is for ${GITHUB_SHA:0:7}. Bump the version in cleftune/__init__.py and pyproject.toml, then run again."
+            exit 1
+          fi
+          echo "version=$app" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "### Building ClefTune $tag from ${GITHUB_SHA:0:7}" >> "$GITHUB_STEP_SUMMARY"
+
   build:
+    needs: version
     strategy:
       fail-fast: false
       matrix:
@@ -57,17 +108,42 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    name: Publish ${{ needs.version.outputs.tag }}
+    needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.version.outputs.tag }}
+      DRAFT: ${{ inputs.draft || false }}
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: installers
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: installers/*
-          generate_release_notes: true
+
+      - name: Checksums
+        working-directory: installers
+        run: |
+          ls -la
+          count=$(ls | wc -l)
+          if [ "$count" -lt 4 ]; then echo "::error::Expected 4 installers, found $count."; exit 1; fi
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create or update the release
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists: replacing its files"
+            gh release upload "$TAG" installers/* --clobber
+            [ "$DRAFT" = "true" ] || gh release edit "$TAG" --draft=false --latest
+          else
+            flags=(--title "ClefTune $TAG" --target "$GITHUB_SHA" --generate-notes)
+            if [ "$DRAFT" = "true" ]; then flags+=(--draft); else flags+=(--latest); fi
+            gh release create "$TAG" installers/* "${flags[@]}"
+          fi
+          url=$(gh release view "$TAG" --json url --jq .url)
+          echo "### Released [ClefTune $TAG]($url)" >> "$GITHUB_STEP_SUMMARY"
+          [ "$DRAFT" = "true" ] && echo "Draft: review and publish it from the Releases page." >> "$GITHUB_STEP_SUMMARY" || true
