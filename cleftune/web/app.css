@@ -182,10 +182,10 @@ h2.shelf-title { font-size: 20px; margin: 28px 0 14px; display: flex; align-item
 .track .like:not(.on) { visibility: hidden; }
 .track:hover .like { visibility: visible; }
 .eq { display: flex; gap: 2px; align-items: flex-end; height: 16px; }
-.eq i { width: 3px; background: var(--accent); animation: eq 1s ease-in-out infinite; }
+.eq i { width: 3px; height: 16px; background: var(--accent); transform-origin: bottom; animation: eq 1s ease-in-out infinite; }
 .eq i:nth-child(2) { animation-delay: -.4s; } .eq i:nth-child(3) { animation-delay: -.7s; }
 .paused .eq i { animation-play-state: paused; }
-@keyframes eq { 0%, 100% { height: 4px; } 50% { height: 16px; } }
+@keyframes eq { 0%, 100% { transform: scaleY(.25); } 50% { transform: scaleY(1); } }   /* transform: no layout per frame */
 
 /* page header */
 .page-head { display: flex; gap: 28px; align-items: flex-end; margin-bottom: 26px; }
@@ -289,14 +289,12 @@ ol.steps { margin: 8px 0; padding-left: 20px; color: var(--text-2); line-height:
 .lyrics .line .word:hover { color: var(--text-2); }
 .lyrics .line.active.has-words { color: var(--text-3); }
 .lyrics .line.active .word.sung { color: var(--text); }
-/* the word being sung fills left to right (--p set every frame), with a soft edge and an accent glow on the beat */
+/* the word being sung fills left to right (--p, ~12 updates a second) with a soft accent edge */
 .lyrics .line.active .word.now {
   color: transparent;
   background: linear-gradient(90deg, var(--text) calc(var(--p, 0%) - 6%), color-mix(in srgb, var(--accent) 70%, var(--text)) var(--p, 0%), var(--text-3) calc(var(--p, 0%) + 6%));
   -webkit-background-clip: text; background-clip: text;
-  animation: word-hit .35s ease-out;
 }
-@keyframes word-hit { from { text-shadow: 0 0 22px color-mix(in srgb, var(--accent) 85%, transparent); } }
 details.advanced summary { cursor: pointer; color: var(--text-2); font-size: 13px; }
 details.advanced[open] summary { margin-bottom: 8px; }
 
@@ -305,13 +303,28 @@ details.advanced[open] summary { margin-bottom: 8px; }
 .np { position: relative; display: grid; grid-template-columns: minmax(280px, 44%) minmax(0, 1fr); gap: 48px; height: 100%;
       padding: 28px 36px; overflow: hidden; isolation: isolate; animation: np-in .28s ease-out; }
 @keyframes np-in { from { opacity: 0; transform: translateY(10px); } }
-.np-bg { position: absolute; inset: -60px; z-index: -1; overflow: hidden; }
+.np.np-closing { animation: np-out .2s ease-in forwards; }
+@keyframes np-out { to { opacity: 0; transform: translateY(28px); } }
+/* the big player has its own controls, so the player bar steps aside */
+body.np-open { --bar-h: 0px; }
+body.np-open #playerbar { visibility: hidden; pointer-events: none; }
+.np-min { position: absolute; top: 16px; left: 16px; z-index: 2; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center;
+  color: var(--text); background: color-mix(in srgb, var(--bg) 55%, transparent); border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); cursor: pointer; transition: background .2s, transform .2s; }
+.np-min:hover { background: color-mix(in srgb, var(--bg) 85%, transparent); transform: translateY(2px); }
+.np-min .icon { width: 26px; height: 26px; }
+.np-volume { display: flex; align-items: center; gap: 6px; width: min(100%, 300px); }
+.np-volume input { flex: 1; }
+.np-volume .icon-btn.on .icon { color: var(--accent); }
+/* its own compositor layer: painted once, so repaints above it never redo the blur */
+.np-bg { position: absolute; inset: -60px; z-index: -1; overflow: hidden; will-change: transform; contain: strict; pointer-events: none; }
 .np-bg img { width: 100%; height: 100%; object-fit: cover; filter: blur(70px) saturate(1.5); opacity: .45; transform: scale(1.15); }
 .np-bg::after { content: ""; position: absolute; inset: 0;
   background: radial-gradient(ellipse at 30% 40%, transparent 0%, color-mix(in srgb, var(--bg) 70%, transparent) 55%, var(--bg) 100%); }
 [data-theme="light"] .np-bg img { opacity: .3; }
-.np-left { display: flex; flex-direction: column; gap: 16px; justify-content: center; align-items: center; min-height: 0; }
-.np-art { width: min(100%, 460px, 52vh); aspect-ratio: 1; border-radius: 18px; overflow: hidden; cursor: pointer; flex: none;
+.np-left { display: flex; flex-direction: column; gap: 14px; justify-content: center; align-items: center; min-height: 0; }
+/* the artwork takes what's left after the title, seek bar, controls and volume (~440px of the window height) */
+.np-art { width: min(100%, 460px, max(180px, calc(100vh - 440px))); aspect-ratio: 1; border-radius: 18px; overflow: hidden; cursor: pointer; flex: none;
           box-shadow: 0 30px 80px color-mix(in srgb, var(--accent) 30%, rgba(0,0,0,.55)); background: var(--bg-3);
           transition: transform .35s cubic-bezier(.2,.8,.2,1), box-shadow .35s; }
 .np-art.paused { transform: scale(.94); box-shadow: 0 16px 40px rgba(0,0,0,.4); }
@@ -424,7 +437,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border: 0; bord
   .track { grid-template-columns: 44px minmax(0, 1fr) 54px 38px 38px; }
   .track .t-album { display: none; }
   #view.np-mode { overflow-y: auto; }
-  .np { grid-template-columns: 1fr; height: auto; min-height: 100%; padding: 20px; gap: 24px; }
+  .np { grid-template-columns: 1fr; height: auto; min-height: 100%; padding: 64px 20px 20px; gap: 24px; }
   .np-lyrics-col .np-right { max-height: 60vh; }
   .np-right .lyrics .line { font-size: 22px; }
   .top-result { grid-template-columns: 1fr; }

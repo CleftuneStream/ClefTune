@@ -49,6 +49,7 @@ const ICONS = {
   person: "M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z",
   up: "M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z",
   down: "M20 12l-1.41-1.41L13 16.17V4h-2v12.17l-5.58-5.59L4 12l8 8 8-8z",
+  chevronDown: "M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z",
   link: "M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z",
   album: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 14.5c-2.49 0-4.5-2.01-4.5-4.5S9.51 7.5 12 7.5s4.5 2.01 4.5 4.5-2.01 4.5-4.5 4.5zm0-5.5c-.55 0-1 .45-1 1s.45 1 1 1 1-.45 1-1-.45-1-1-1z",
   note: "M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z",
@@ -316,21 +317,35 @@ function currentPos() {
   return S.dur ? Math.min(p, S.dur) : p;
 }
 
+/* Runs every frame but only touches the page when something visible changed: rewriting the
+   seek bars and clocks 60 times a second made the window repaint (and grow) constantly. */
+const SEEK_BARS = [["#pb-seekbar", "#pb-time"], ["#np-seekbar", "#np-time"]];
+
+// The window add-on starts its browser engine with --expose-gc (see viewer.py). Left alone, that
+// engine lets garbage from lyrics and seek-bar updates pile up into hundreds of MB; a collection
+// once a minute keeps it near its real size. In a normal browser tab window.gc doesn't exist.
+if (typeof window.gc === "function") setInterval(() => { try { window.gc(); } catch { /* not allowed */ } }, 60000);
+const setText = (el, text) => { if (el && el.textContent !== text) el.textContent = text; };
+
 function tick() {
   const pos = currentPos();
   if (!S.seeking) {
-    const pct = S.dur ? (pos / S.dur) * 100 : 0;
-    for (const [barSel, timeSel] of [["#pb-seekbar", "#pb-time"], ["#np-seekbar", "#np-time"]]) {
+    const permille = S.dur ? Math.round((pos / S.dur) * 1000) : 0;
+    const now = fmt(pos);
+    for (const [barSel, timeSel] of SEEK_BARS) {
       const bar = $(barSel);
       if (!bar) continue;
-      bar.value = Math.round(pct * 10);
-      bar.style.setProperty("--p", pct + "%");
-      $(timeSel).textContent = fmt(pos);
+      if (bar._permille !== permille) {
+        bar._permille = permille;
+        bar.value = permille;
+        bar.style.setProperty("--p", permille / 10 + "%");
+      }
+      setText($(timeSel), now);
     }
   }
-  $("#pb-dur").textContent = fmt(S.dur);
-  const npDur = $("#np-dur");
-  if (npDur) npDur.textContent = fmt(S.dur);
+  const dur = fmt(S.dur);
+  setText($("#pb-dur"), dur);
+  setText($("#np-dur"), dur);
   updateLyricHighlight(pos);
   requestAnimationFrame(tick);
 }
@@ -369,7 +384,7 @@ function setupPlayerBar() {
   // artwork: full-screen player with lyrics (click again to go back); title: the album; artist: their page
   const openNowPlaying = () => {
     if (!S.state?.current) return;
-    if (location.hash.startsWith("#/nowplaying")) history.back(); else go("/nowplaying");
+    if (location.hash.startsWith("#/nowplaying")) closeNowPlaying(); else go("/nowplaying");
   };
   $("#pb-art").onclick = openNowPlaying;
   $("#pb-title").onclick = () => {
@@ -380,13 +395,7 @@ function setupPlayerBar() {
   $("#pb-title").setAttribute("role", "button");
   $("#pb-queue").onclick = () => togglePanel("queue");
   $("#pb-lyrics").onclick = () => togglePanel("lyrics");
-  $("#pb-sleep").onclick = e => openMenu(e.currentTarget, [
-    { label: "Sleep timer", heading: true },
-    ...[5, 10, 15, 30, 45, 60, 90].map(m => ({ label: `${m} minutes`, icon: "timer", run: () => call("sleep", { minutes: m }).then(() => toast(`Pausing in ${m} minutes`)) })),
-    { label: "End of current song", icon: "note", run: () => call("sleep", { minutes: -1 }).then(() => toast("Stopping after this song")) },
-    S.state?.sleep != null && { label: "Turn off", icon: "close", run: () => call("sleep", { minutes: 0 }).then(() => toast("Sleep timer off")) },
-  ], "up");
-
+  $("#pb-sleep").onclick = e => openSleepMenu(e.currentTarget);
   bindSeekbar($("#pb-seekbar"), "#pb-time");
 
   const vol = $("#pb-volume");
@@ -457,6 +466,16 @@ const cleanAll = list => list.map(clean);
 /* ============================================================
  * Menus and dialogs
  * ============================================================ */
+/* sleep timer menu, opened from the player bar or the big player */
+function openSleepMenu(anchor) {
+  openMenu(anchor, [
+    { label: "Sleep timer", heading: true },
+    ...[5, 10, 15, 30, 45, 60, 90].map(m => ({ label: `${m} minutes`, icon: "timer", run: () => call("sleep", { minutes: m }).then(() => toast(`Pausing in ${m} minutes`)) })),
+    { label: "End of current song", icon: "note", run: () => call("sleep", { minutes: -1 }).then(() => toast("Stopping after this song")) },
+    S.state?.sleep != null && { label: "Turn off", icon: "close", run: () => call("sleep", { minutes: 0 }).then(() => toast("Sleep timer off")) },
+  ], "up");
+}
+
 let menuCleanup = null;
 function openMenu(anchor, items, dir = "down", point = null) {
   closeMenu();
@@ -696,6 +715,7 @@ function saveButton(page) {
  * ============================================================ */
 const view = $("#view");
 let routeToken = 0;
+let routeName = null, npReturnable = false;   // can "minimize" go back to an in-app page?
 
 function go(path) { if (location.hash !== "#" + path) location.hash = path; else route(); }
 
@@ -719,6 +739,9 @@ async function route() {
   document.querySelectorAll(".nav-item").forEach(n => n.classList.toggle("active", n.dataset.route === name));
   if (name !== "search") $("#search").value = "";
   view.classList.toggle("np-mode", name === "nowplaying");
+  document.body.classList.toggle("np-open", name === "nowplaying");   // the big player has its own controls
+  if (name === "nowplaying" && routeName !== "nowplaying") npReturnable = routeName !== null;
+  routeName = name;
   view.scrollTop = 0;
   const views = { home: homeView, explore: exploreView, search: searchView, album: albumView, artist: artistView,
     playlist: playlistView, mood: moodView, library: libraryView, downloads: downloadsView, settings: settingsView, cache: cacheView,
@@ -1180,6 +1203,7 @@ async function settingsView() {
 
 /* ---------- now playing ---------- */
 const bigArt = src => src?.replace(/=w\d+-h\d+/, "=w1080-h1080");
+const smallArt = src => src?.replace(/=w\d+-h\d+/, "=w240-h240");   // heavily blurred anyway
 
 async function nowPlayingView() {
   const cur = S.state?.current;
@@ -1189,10 +1213,13 @@ async function nowPlayingView() {
   const btn = (id, ic, title, run) => h("button", { class: "icon-btn", id, title, onclick: run }, icon(ic));
   const seek = h("input", { id: "np-seekbar", type: "range", min: "0", max: "1000", value: "0", "aria-label": "Seek" });
   bindSeekbar(seek, "#np-time");
+  const volume = h("input", { id: "np-volume", type: "range", min: "0", max: "100", value: String(S.state?.volume ?? 80), "aria-label": "Volume",
+    oninput: e => { const pb = $("#pb-volume"); pb.value = e.target.value; pb.dispatchEvent(new Event("input")); e.target.style.setProperty("--p", e.target.value + "%"); } });
   const out = h("div", { class: "np" },
-    h("div", { class: "np-bg", "aria-hidden": "true" }, cur.thumbnail ? h("img", { src: bigArt(cur.thumbnail), alt: "", referrerpolicy: "no-referrer" }) : null),
+    h("div", { class: "np-bg", "aria-hidden": "true" }, cur.thumbnail ? h("img", { src: smallArt(cur.thumbnail), alt: "", referrerpolicy: "no-referrer" }) : null),
+    h("button", { class: "np-min", title: "Minimize (Esc)", "aria-label": "Minimize player", onclick: closeNowPlaying }, icon("chevronDown")),
     h("div", { class: "np-left" },
-      h("div", { class: "np-art" + (S.playing ? "" : " paused"), id: "np-art", title: "Back (Esc)", onclick: () => history.back() }, img(bigArt(cur.thumbnail))),
+      h("div", { class: "np-art" + (S.playing ? "" : " paused"), id: "np-art", title: "Minimize (Esc)", onclick: closeNowPlaying }, img(bigArt(cur.thumbnail))),
       h("div", { class: "np-meta" },
         h("div", { class: "np-title" + (cur.album?.id ? " link" : ""), title: cur.album?.id ? `Open the album “${cur.album.name}”` : cur.title,
           onclick: () => cur.album?.id && go(`/album/${cur.album.id}`) }, cur.title),
@@ -1206,14 +1233,26 @@ async function nowPlayingView() {
         h("button", { class: "play-btn big", id: "np-play", title: "Play/Pause (Space)", onclick: () => call("toggle") }),
         btn("np-next", "next", "Next (Shift+→)", () => call("next")),
         btn("np-repeat", "repeat", "Repeat (R)", () => $("#pb-repeat").click())),
+      h("div", { class: "np-volume" },
+        btn("np-mute", "volume", "Mute (M)", () => $("#pb-mute").click()), volume,
+        btn("np-sleep", "timer", "Sleep timer", e => openSleepMenu(e.currentTarget))),
       h("div", { class: "np-actions" },
         h("button", { class: "btn small", id: "np-like", onclick: () => toggleLike(cur) }),
         h("button", { class: "btn small", onclick: e => trackMenu(e.currentTarget, cur) }, icon("more"), "More"),
         h("button", { class: "btn small", onclick: () => togglePanel("queue") }, icon("queue"), "Up next"))),
     h("div", { class: "np-lyrics-col" }, h("div", { class: "lyrics-head-slot" }), lyricsBox));
   ensureLyrics().then(() => { if (S.state?.current?.videoId === cur.videoId) renderLyricsInto(lyricsBox); });
-  queueMicrotask(renderNowPlayingControls);
+  setTimeout(renderNowPlayingControls);   // after route() has put the view on the page
   return out;
+}
+
+function closeNowPlaying() {
+  const np = view.querySelector(".np");
+  const leave = () => { if (npReturnable) history.back(); else go("/home"); };
+  if (!np || matchMedia("(prefers-reduced-motion: reduce)").matches) return leave();
+  if (np.classList.contains("np-closing")) return;
+  np.classList.add("np-closing");
+  setTimeout(leave, 200);
 }
 
 function lyricsSkeleton() {
@@ -1234,6 +1273,12 @@ function renderNowPlayingControls() {
   $("#np-shuffle")?.classList.toggle("on", !!st?.shuffle);
   const rep = $("#np-repeat");
   if (rep) { setIcon(rep, st?.repeat === "one" ? "repeatOne" : "repeat"); rep.classList.toggle("on", !!st && st.repeat !== "off"); }
+  const vol = st?.volume ?? 80, npVol = $("#np-volume");
+  if (npVol && document.activeElement !== npVol) { npVol.value = vol; npVol.style.setProperty("--p", vol + "%"); }
+  const mute = $("#np-mute");
+  if (mute && mute.dataset.icon !== (vol === 0 ? "mute" : "volume")) { mute.dataset.icon = vol === 0 ? "mute" : "volume"; setIcon(mute, mute.dataset.icon); }
+  const sleep = $("#np-sleep");
+  if (sleep) { sleep.classList.toggle("on", st?.sleep != null); sleep.title = $("#pb-sleep").title; }
   const like = $("#np-like");
   if (like && cur) {
     const liked = S.liked.has(cur.videoId);
@@ -1415,12 +1460,14 @@ function updateLyricHighlight(pos, force = false) {
       }
     });
   }
-  // the word being sung fills from left to right over its own duration
+  // the word being sung fills from left to right over its own duration. Capped at ~12 updates a
+  // second: each update repaints the line, and repainting every frame made the window's memory climb.
   if (words && wordIdx >= 0 && S.wordEls?.length) {
     const w = words[wordIdx];
     const p = Math.round(Math.min(1, Math.max(0, (t - w.t) / Math.max(0.05, w.d || 0.3))) * 100);
-    if (p !== S.wordP) {
-      S.wordP = p;
+    const now = performance.now();
+    if (p !== S.wordP && (p === 100 || S.wordP < 0 || now - (S.wordPAt || 0) >= 80)) {
+      S.wordP = p; S.wordPAt = now;
       for (const els of S.wordEls) els[wordIdx]?.style.setProperty("--p", p + "%");
     }
   }
@@ -1533,7 +1580,7 @@ function setupShortcuts() {
     else if (k === "r") $("#pb-repeat").click();
     else if (k === "q") togglePanel("queue");
     else if (k === "y") togglePanel("lyrics");
-    else if (k === "Escape" && location.hash.startsWith("#/nowplaying")) history.back();
+    else if (k === "Escape" && location.hash.startsWith("#/nowplaying")) closeNowPlaying();
     else return;
   });
 }

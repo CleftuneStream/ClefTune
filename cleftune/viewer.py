@@ -114,7 +114,17 @@ def _userns_blocked() -> bool:
     return False
 
 
+def _allow_page_gc(env_var: str) -> None:
+    """Let the UI page call window.gc(). The embedded Chromium rarely collects the garbage that
+    animated pages leave behind (DOM and style objects), so the window could grow past 1 GB;
+    the page now collects it about once a minute. Leaves any existing --js-flags untouched."""
+    flags = os.environ.get(env_var, "")
+    if "--js-flags" not in flags:
+        os.environ[env_var] = (flags + " --js-flags=--expose-gc").strip()
+
+
 def _qt_app():
+    _allow_page_gc("QTWEBENGINE_CHROMIUM_FLAGS")        # must be set before Qt WebEngine starts
     if _userns_blocked() or os.environ.get("CLEFTUNE_NO_SANDBOX"):
         # the main page is the app's own local UI (strict CSP), so running without the sandbox is acceptable
         os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
@@ -245,6 +255,7 @@ def _start_windows_tray(link: AppLink, show) -> object | None:
 
 
 def run_pywebview(link: AppLink, url: str, storage: Path, debug: bool) -> int:
+    _allow_page_gc("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")   # Windows (WebView2 is Chromium too)
     import webview
 
     window = webview.create_window(TITLE, url, width=1280, height=820, min_size=(940, 600),
