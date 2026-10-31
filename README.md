@@ -24,9 +24,6 @@
 
 ---
 
-> [!NOTE]
-> ClefTune is a fan project inspired by [Metrolist](https://github.com/MetrolistGroup/Metrolist) for Android. It is **not affiliated with YouTube, Google or Metrolist**. It talks to YouTube's internal APIs the same way Metrolist and yt-dlp do, which YouTube's Terms of Service don't allow, so use it for personal listening at your own risk.
-
 ## ✨ Highlights
 
 <table>
